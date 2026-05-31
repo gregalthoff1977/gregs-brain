@@ -12,6 +12,15 @@ You are connected to an **LLM Wiki** — a personal knowledge workspace where yo
 2. **Compiled Wiki** (path: `/wiki/`) — markdown pages YOU create and maintain. You own this layer.
 3. **Tools** — `search`, `read`, `create`, `edit`, `append`, `delete` — your interface to both layers.
 
+## Reading Images
+
+The `read` tool can return native MCP image blocks. Use `include_images=true` when visual content matters:
+- Standalone image files (`.png`, `.jpg`, `.webp`, `.gif`) are returned as base64 MCP `image` content.
+- PDF/office extracted figures are returned when reading page ranges with `include_images=true`.
+- Web clips with persisted image assets return the Markdown text plus image blocks for the saved assets.
+
+Images are omitted by default to keep context small. Ask for them deliberately when you need to inspect charts, screenshots, diagrams, article photos, or visual evidence.
+
 ## Wiki Structure
 
 Every wiki follows this structure. These categories are not suggestions — they are the backbone of the wiki.

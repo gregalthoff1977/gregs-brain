@@ -8,13 +8,12 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-import httpx
-
-from html_parser import Image, Parser
+from html_parser import Image
 
 
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
-MAX_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_IMAGES = 12
+MAX_IMAGE_BYTES = 2_500_000
+MAX_TOTAL_BYTES = 6_000_000
 IMAGE_TIMEOUT = 10
 IMAGE_CONCURRENCY = 6
 
@@ -38,6 +37,8 @@ class WebclipAsset:
     alt: str
     sha256: str
     index: int
+    width: int | None = None
+    height: int | None = None
     document_id: str | None = None
 
     @property
@@ -56,6 +57,8 @@ class WebclipAsset:
             "sha256": self.sha256,
             "index": self.index,
             "document_id": self.document_id,
+            "width": self.width,
+            "height": self.height,
         }
 
 
@@ -68,85 +71,62 @@ async def materialize_webclip_assets(
         return markdown, []
 
     sem = asyncio.Semaphore(IMAGE_CONCURRENCY)
-    total_bytes = 0
     assets_by_ref: dict[str, WebclipAsset] = {}
+    total_bytes = 0
 
     async def fetch_one(index: int, image: Image) -> None:
         nonlocal total_bytes
         if not image.ref:
             return
+        if not image.url.startswith("data:"):
+            return
+
+        fetched: tuple[bytes, str, str] | None = None
         async with sem:
-            fetched = await _fetch_image(image.url)
+            result = await _fetch_image(image.url)
+        if result:
+            fetched = (result[0], result[1], image.url)
         if not fetched:
             return
 
-        data, content_type = fetched
+        data, content_type, fetched_url = fetched
         if total_bytes + len(data) > MAX_TOTAL_BYTES:
             return
         total_bytes += len(data)
 
-        ext = SAFE_MIME_EXT.get(content_type) or _guess_extension(image.url) or "bin"
+        ext = SAFE_MIME_EXT.get(content_type) or _guess_extension(fetched_url) or "bin"
         filename = f"image-{index:02d}.{ext}"
         src = f"{asset_dir_name}/{filename}"
+        inferred_width, inferred_height = _infer_dimensions_from_url(fetched_url)
         assets_by_ref[image.ref] = WebclipAsset(
             filename=filename,
             src=src,
             data=data,
             content_type=content_type,
             file_type=ext,
-            original_url=image.url,
+            original_url=fetched_url,
             alt=image.alt,
             sha256=hashlib.sha256(data).hexdigest(),
             index=index,
+            width=image.width or inferred_width,
+            height=image.height or inferred_height,
         )
 
-    await asyncio.gather(*(fetch_one(i, image) for i, image in enumerate(images, start=1)))
+    await asyncio.gather(*(fetch_one(i, image) for i, image in enumerate(images[:MAX_IMAGES], start=1)))
 
-    for image in images:
+    for image in sorted(images, key=lambda img: len(img.ref or ""), reverse=True):
         token = f"llmwiki-image://{image.ref}"
         asset = assets_by_ref.get(image.ref)
-        markdown = markdown.replace(token, asset.markdown_src if asset else image.url)
+        markdown = markdown.replace(token, asset.markdown_src if asset else "")
 
     assets = [assets_by_ref[image.ref] for image in images if image.ref in assets_by_ref]
     return markdown, assets
 
 
 async def _fetch_image(url: str) -> tuple[bytes, str] | None:
-    if url.startswith("data:"):
-        return _decode_data_image(url)
-
-    resolved = await asyncio.to_thread(Parser._resolve_safe, url)
-    if not resolved:
+    if not url.startswith("data:"):
         return None
-
-    safe_ip, host, port, scheme, path = resolved
-    ip_str = f"[{safe_ip}]" if ":" in safe_ip else safe_ip
-    default_port = 443 if scheme == "https" else 80
-    port_suffix = f":{port}" if port != default_port else ""
-    pinned_url = f"{scheme}://{ip_str}{port_suffix}{path}"
-
-    try:
-        async with httpx.AsyncClient(follow_redirects=False, verify=False) as client:
-            resp = await client.get(
-                pinned_url,
-                headers={"Host": host, "User-Agent": "Mozilla/5.0"},
-                timeout=IMAGE_TIMEOUT,
-            )
-            resp.raise_for_status()
-    except Exception:
-        return None
-
-    data = resp.content
-    if len(data) > MAX_IMAGE_BYTES:
-        return None
-
-    content_type = _clean_content_type(resp.headers.get("content-type", ""))
-    if content_type not in SAFE_MIME_EXT:
-        content_type = _guess_content_type(url)
-    if content_type not in SAFE_MIME_EXT:
-        return None
-
-    return data, content_type
+    return _decode_data_image(url)
 
 
 def _decode_data_image(url: str) -> tuple[bytes, str] | None:
@@ -158,12 +138,28 @@ def _decode_data_image(url: str) -> tuple[bytes, str] | None:
         return None
     try:
         payload = match.group(3)
-        data = base64.b64decode(payload, validate=False) if match.group(2) else payload.encode("utf-8")
+        data = base64.b64decode(payload, validate=True) if match.group(2) else payload.encode("utf-8")
     except Exception:
         return None
     if len(data) > MAX_IMAGE_BYTES:
         return None
+    if _sniff_image_type(data) != content_type:
+        return None
     return data, content_type
+
+
+def _sniff_image_type(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in {b"avif", b"avis"}:
+        return "image/avif"
+    return None
 
 
 def _clean_content_type(value: str) -> str:
@@ -181,3 +177,12 @@ def _guess_extension(url: str) -> str | None:
         return SAFE_MIME_EXT[content_type]
     suffix = urlparse(url).path.rsplit(".", 1)[-1].lower()
     return suffix if suffix in {"jpg", "jpeg", "png", "gif", "webp", "avif"} else None
+
+
+def _infer_dimensions_from_url(url: str) -> tuple[int | None, int | None]:
+    match = re.search(r"/(\d{2,5})x(\d{2,5})(?:[./?_-]|$)", url)
+    if not match:
+        return None, None
+    width = int(match.group(1))
+    height = int(match.group(2))
+    return (width or None), (height or None)

@@ -95,6 +95,15 @@ function isNoteFile(doc: DocumentListItem): boolean {
   return ft === 'md' || ft === 'txt' || ft === 'note'
 }
 
+function isWebClipDoc(doc: DocumentListItem): boolean {
+  const metadata = doc.metadata ?? {}
+  return (
+    metadata.clip_kind === 'web'
+    || metadata.source_url !== undefined
+    || ['html', 'htm'].includes(doc.file_type)
+  )
+}
+
 function docIcon(ft: string) {
   if (ft === 'pdf') return <FileText className="size-8 text-red-400/70" />
   if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ft)) return <Image className="size-8 text-violet-400/70" />
@@ -286,7 +295,8 @@ export function FilesGrid({
     return docsInFolder.filter((d) => (d.title || d.filename).toLowerCase().includes(q) || d.file_type.toLowerCase().includes(q))
   }, [docsInFolder, searchQuery])
 
-  const isActiveNote = activeDoc ? isNoteFile(activeDoc) : false
+  const isActiveWebClip = activeDoc ? isWebClipDoc(activeDoc) : false
+  const isActiveNote = activeDoc ? isNoteFile(activeDoc) && !isActiveWebClip : false
 
   // Breadcrumbs — adapt to browsing vs viewing
   const breadcrumbs = React.useMemo(() => {
@@ -538,6 +548,12 @@ export function FilesGrid({
               <X className="size-3.5" />
             </button>
           </>
+        ) : activeDoc && isActiveWebClip ? (
+          <>
+            <button onClick={closeDoc} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors cursor-pointer" title="Close">
+              <X className="size-3.5" />
+            </button>
+          </>
         ) : activeDoc ? (
           <>
             <button onClick={() => { /* TODO: trigger search in PDF viewer */ }} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors cursor-pointer" title="Find in document">
@@ -557,7 +573,9 @@ export function FilesGrid({
       <div className="flex-1 min-h-0">
         {activeDoc ? (
           /* ── Document viewer ── */
-          isNoteFile(activeDoc) ? (
+          isWebClipDoc(activeDoc) ? (
+            <HtmlDocViewer documentId={activeDoc.id} title={activeDoc.title || activeDoc.filename} />
+          ) : isNoteFile(activeDoc) ? (
             <NoteEditor
               key={activeDoc.id}
               documentId={activeDoc.id}
@@ -578,8 +596,6 @@ export function FilesGrid({
             <PdfDocViewer documentId={activeDoc.id} title={activeDoc.title || activeDoc.filename} initialPage={docInitialPage} hideToolbar />
           ) : ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(activeDoc.file_type) ? (
             <ImageViewer documentId={activeDoc.id} title={activeDoc.title || activeDoc.filename} />
-          ) : ['html', 'htm'].includes(activeDoc.file_type) ? (
-            <HtmlDocViewer documentId={activeDoc.id} title={activeDoc.title || activeDoc.filename} />
           ) : ['xlsx', 'xls', 'csv'].includes(activeDoc.file_type) ? (
             <ContentViewer documentId={activeDoc.id} title={activeDoc.title || activeDoc.filename} fileType={activeDoc.file_type} />
           ) : (

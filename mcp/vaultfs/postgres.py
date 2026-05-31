@@ -52,7 +52,7 @@ class PostgresVaultFS(VaultFS):
         return await scoped_queryrow(
             self.user_id,
             "SELECT id, user_id, filename, title, path, content, tags, version, file_type, "
-            "page_count, highlights, created_at, updated_at "
+            "page_count, highlights, metadata, created_at, updated_at "
             "FROM documents WHERE knowledge_base_id = $1 AND filename = $2 AND path = $3 AND NOT archived AND user_id = $4",
             kb_id, filename, dir_path, self.user_id,
         )
@@ -61,7 +61,7 @@ class PostgresVaultFS(VaultFS):
         return await scoped_queryrow(
             self.user_id,
             "SELECT id, user_id, filename, title, path, content, tags, version, file_type, "
-            "page_count, highlights, created_at, updated_at "
+            "page_count, highlights, metadata, created_at, updated_at "
             "FROM documents WHERE knowledge_base_id = $1 AND (filename = $2 OR title = $2) AND NOT archived AND user_id = $3",
             kb_id, name, self.user_id,
         )
@@ -146,6 +146,7 @@ class PostgresVaultFS(VaultFS):
             self.user_id,
             "SELECT id, filename, title, path, file_type, tags, page_count, updated_at "
             "FROM documents WHERE knowledge_base_id = $1 AND NOT archived AND user_id = $2 "
+            "AND COALESCE(metadata->>'asset', 'false') <> 'true' "
             "ORDER BY path, filename",
             kb_id, self.user_id,
         )
@@ -153,8 +154,9 @@ class PostgresVaultFS(VaultFS):
     async def list_documents_with_content(self, kb_id: str) -> list[dict]:
         return await scoped_query(
             self.user_id,
-            "SELECT id, filename, title, path, content, tags, file_type, page_count, highlights "
+            "SELECT id, filename, title, path, content, tags, file_type, page_count, highlights, metadata "
             "FROM documents WHERE knowledge_base_id = $1 AND NOT archived AND user_id = $2 "
+            "AND COALESCE(metadata->>'asset', 'false') <> 'true' "
             "ORDER BY path, filename",
             kb_id, self.user_id,
         )
@@ -210,6 +212,17 @@ class PostgresVaultFS(VaultFS):
     async def load_image_bytes(self, doc_id: str, image_id: str) -> bytes | None:
         s3_key = f"{self.user_id}/{doc_id}/images/{image_id}"
         return await self._load_s3(s3_key)
+
+    async def load_asset_bytes(self, asset_doc_id: str) -> bytes | None:
+        row = await scoped_queryrow(
+            self.user_id,
+            "SELECT id, user_id, filename, file_type FROM documents "
+            "WHERE id = $1 AND user_id = $2 AND NOT archived",
+            asset_doc_id, self.user_id,
+        )
+        if not row:
+            return None
+        return await self.load_source_bytes(dict(row))
 
     async def _load_s3(self, key: str) -> bytes | None:
         session = _get_s3_session()

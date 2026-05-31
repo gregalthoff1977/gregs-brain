@@ -66,11 +66,31 @@ class TextAnchor(BaseModel):
     suffix: str | None = Field(default=None, max_length=200)
 
 
+class PdfRect(BaseModel):
+    """One line-rect of a PDF highlight, in PDF user-space points (1/72").
+    Zoom/rotation independent — viewer converts to viewport coords at render."""
+    x: float
+    y: float
+    width: float = Field(ge=0)
+    height: float = Field(ge=0)
+
+
+class PdfAnchor(BaseModel):
+    """PDF-relative anchor used when Highlight.type == "pdf".
+    Stored once per highlight; one rect per visual line of the selection."""
+    page: int = Field(ge=1)
+    textContent: str = Field(max_length=10000)
+    prefix: str | None = Field(default=None, max_length=200)
+    suffix: str | None = Field(default=None, max_length=200)
+    rects: list[PdfRect] = Field(min_length=1, max_length=200)
+
+
 class Highlight(BaseModel):
     id: str = Field(max_length=64)
     type: Literal["text", "pdf"] = "text"
     anchor: HighlightAnchor | None = None
     textAnchor: TextAnchor | None = None
+    pdfAnchor: PdfAnchor | None = None
     comment: str | None = Field(default=None, max_length=4000)
     color: str = Field(default="yellow", max_length=32)
     createdAt: str = Field(max_length=64)
@@ -101,7 +121,8 @@ class CreateWebClip(BaseModel):
     url: str = Field(max_length=2048)
     title: str = Field(max_length=512)
     html: str = Field(max_length=10 * 1024 * 1024)
-    highlights: list[Highlight] | None = None
+    path: str = Field(default="/webclipper/", max_length=256)
+    highlights: list[Highlight] | None = Field(default=None, max_length=500)
 
 
 class UpdateContent(BaseModel):

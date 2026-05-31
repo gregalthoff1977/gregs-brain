@@ -70,7 +70,7 @@ class DocumentService(ABC):
     @abstractmethod
     async def create_web_clip(
         self, kb_id: str, url: str, title: str, html: str,
-        highlights: list[dict] | None = None,
+        highlights: list[dict] | None = None, path: str = "/webclipper/",
     ) -> dict: ...
 
     @abstractmethod

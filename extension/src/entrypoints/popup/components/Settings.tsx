@@ -4,9 +4,11 @@ import { getMode, setMode, getLocalUrl, setLocalUrl, type Mode } from "@/lib/set
 interface Props {
   onBack: () => void;
   onModeChange: (mode: Mode) => void;
+  isSignedIn: boolean;
+  onSignOut: () => void;
 }
 
-export default function Settings({ onBack, onModeChange }: Props) {
+export default function Settings({ onBack, onModeChange, isSignedIn, onSignOut }: Props) {
   const [mode, setModeState] = useState<Mode>("cloud");
   const [localUrl, setLocalUrlState] = useState("http://localhost:8000");
   const [saved, setSaved] = useState(false);
@@ -102,6 +104,21 @@ export default function Settings({ onBack, onModeChange }: Props) {
 
       {saved && (
         <p className="text-xs text-emerald-700">Settings saved</p>
+      )}
+
+      {isSignedIn && (
+        <div className="border-t border-zinc-200 pt-4">
+          <button
+            onClick={onSignOut}
+            className="h-9 w-full rounded-md border border-zinc-300 bg-white px-4 text-sm
+                       font-medium text-zinc-700 shadow-sm transition-colors
+                       hover:border-zinc-400 hover:bg-zinc-50
+                       focus-visible:outline-none focus-visible:ring-2
+                       focus-visible:ring-zinc-950 focus-visible:ring-offset-2"
+          >
+            Sign out
+          </button>
+        </div>
       )}
     </div>
   );

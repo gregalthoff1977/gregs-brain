@@ -21,6 +21,9 @@ If you use the LLM Wiki Chrome extension, it captures the text content of web pa
 ### Usage data
 We collect basic usage analytics: page views, feature usage, and error logs. We do not use third-party tracking scripts or advertising pixels.
 
+### Legal requests and copyright notices
+If you send us a legal request, copyright complaint, DMCA notice, or counter-notice, we collect the information you provide so we can review, respond to, and preserve records of the request.
+
 ## How your content is stored
 
 | Component | Provider | Location | Purpose |

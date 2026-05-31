@@ -1,10 +1,12 @@
 import { getSupabase } from "@/lib/supabase";
+import { getApiUrl } from "@/lib/settings";
 
 type Message =
   | { type: "SIGN_IN_WITH_GOOGLE" }
   | { type: "SIGN_OUT" }
   | { type: "GET_SESSION" }
   | { type: "DOWNLOAD_PDF"; url: string }
+  | { type: "FETCH_IMAGE_DATA_URL"; url: string; maxBytes?: number }
   | {
       type: "API_FETCH";
       url: string;
@@ -45,6 +47,8 @@ export default defineBackground(() => {
         return getSession();
       case "DOWNLOAD_PDF":
         return downloadPdf(msg.url);
+      case "FETCH_IMAGE_DATA_URL":
+        return fetchImageDataUrl(msg.url, msg.maxBytes);
       case "API_FETCH":
         return apiFetchProxy(msg);
       default:
@@ -69,6 +73,9 @@ export default defineBackground(() => {
     },
   ): Promise<ApiFetchResponse> {
     try {
+      if (!(await isAllowedApiFetchUrl(msg.url))) {
+        return { ok: false, status: 403, error: "Blocked extension fetch target" };
+      }
       const res = await fetch(msg.url, {
         method: msg.method ?? "GET",
         headers: msg.headers,
@@ -87,6 +94,17 @@ export default defineBackground(() => {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Network error";
       return { ok: false, status: 0, error: message };
+    }
+  }
+
+  async function isAllowedApiFetchUrl(url: string): Promise<boolean> {
+    try {
+      const target = new URL(url);
+      if (!["http:", "https:"].includes(target.protocol)) return false;
+      const configured = new URL(await getApiUrl());
+      return target.origin === configured.origin;
+    } catch {
+      return false;
     }
   }
 
@@ -225,6 +243,51 @@ export default defineBackground(() => {
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "PDF download failed";
+      return { error: message };
+    }
+  }
+
+  async function fetchImageDataUrl(
+    url: string,
+    maxBytes = 2_500_000,
+  ): Promise<{ dataUrl: string; size: number; mimeType: string } | { error: string }> {
+    try {
+      const parsed = new URL(url);
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        return { error: "Unsupported image URL" };
+      }
+      const response = await fetch(url, {
+        credentials: "include",
+        cache: "force-cache",
+      });
+      if (!response.ok) {
+        return { error: `Image fetch failed: ${response.status}` };
+      }
+
+      const mimeType = (response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
+      if (!["image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"].includes(mimeType)) {
+        return { error: `Unsupported image type: ${mimeType || "unknown"}` };
+      }
+
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > maxBytes) {
+        return { error: `Image too large: ${buffer.byteLength}` };
+      }
+
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+
+      return {
+        dataUrl: `data:${mimeType};base64,${btoa(binary)}`,
+        size: buffer.byteLength,
+        mimeType,
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Image fetch failed";
       return { error: message };
     }
   }

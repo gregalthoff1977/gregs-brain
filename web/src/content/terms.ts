@@ -25,6 +25,7 @@ When you delete content, we delete it permanently (subject to a standard 7-day d
 You agree not to:
 
 - Upload content that is illegal in your jurisdiction
+- Upload or share content that infringes another party's copyright or other intellectual property rights
 - Use the Service to store or distribute malware
 - Attempt to access other users' data
 - Abuse the Service infrastructure (excessive API calls, scraping, automated bulk uploads beyond reasonable personal use)
@@ -32,6 +33,12 @@ You agree not to:
 - Use the Service to harass, threaten, or harm others
 
 We reserve the right to suspend or terminate accounts that violate these terms.
+
+## Copyright complaints
+
+LLM Wiki respects copyright and responds to notices submitted under the Digital Millennium Copyright Act. Copyright complaints should be sent to our designated agent as described in our [DMCA Policy](/dmca).
+
+We may remove or disable access to material identified in a valid copyright complaint. We may also suspend or terminate accounts that repeatedly infringe copyrights or repeatedly receive valid copyright complaints.
 
 ## PDF processing limits
 

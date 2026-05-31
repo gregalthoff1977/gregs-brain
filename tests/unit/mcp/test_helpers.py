@@ -156,3 +156,53 @@ class TestWikiLinkParsing:
         from tools.references import _parse_wiki_links
         links = _parse_wiki_links("[Img](data:image/png;base64,abc)", "")
         assert links == []
+
+
+@pytest.mark.asyncio
+async def test_read_webclip_returns_asset_images_when_requested():
+    from tools.read import ReadHandler
+
+    class FakeFS:
+        async def get_document(self, kb_id, filename, dir_path):
+            return {
+                "id": "doc-1",
+                "filename": filename,
+                "title": "Clip",
+                "path": dir_path,
+                "content": "Body ![Hero](./clip.assets/image-01.webp)",
+                "tags": [],
+                "version": 1,
+                "file_type": "md",
+                "metadata": {
+                    "assets": [
+                        {
+                            "document_id": "asset-1",
+                            "filename": "image-01.webp",
+                            "content_type": "image/webp",
+                            "file_type": "webp",
+                            "alt": "Hero",
+                        }
+                    ]
+                },
+            }
+
+        async def find_document_by_name(self, kb_id, name):
+            return None
+
+        async def load_asset_bytes(self, asset_doc_id):
+            assert asset_doc_id == "asset-1"
+            return b"webp-bytes"
+
+        async def get_backlinks(self, doc_id):
+            return []
+
+    handler = ReadHandler(FakeFS(), {"id": "kb-1", "slug": "kb"})
+
+    result = await handler.read("clip.md", pages="", sections=None, include_images=True)
+
+    assert isinstance(result, list)
+    assert result[0].type == "text"
+    assert result[1].type == "text"
+    assert "Hero" in result[1].text
+    assert result[2].type == "image"
+    assert result[2].mimeType == "image/webp"

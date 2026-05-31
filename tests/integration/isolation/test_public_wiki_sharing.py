@@ -280,7 +280,23 @@ class TestPublicAssetIsolation:
         assert resp.content == b"# Hello from Alice"
         assert resp.headers["content-type"].startswith("text/markdown")
         assert resp.headers["cache-control"] == "no-store, must-revalidate"
+        assert resp.headers["x-content-type-options"] == "nosniff"
         assert fake_s3.calls == [expected_key]
+
+    async def test_active_asset_types_download_instead_of_rendering_inline(self, client, pool, fake_s3):
+        await pool.execute(
+            "UPDATE documents SET filename = 'unsafe.html', file_type = 'html' WHERE id = $1",
+            DOC_A_ID,
+        )
+        await set_document_number(pool, DOC_A_ID, 12)
+        await publish_kb(pool, KB_A_ID, "alice-html-asset")
+        expected_key = f"{USER_A_ID}/{DOC_A_ID}/tagged.html"
+        fake_s3.store[expected_key] = b"<script>alert(1)</script>"
+
+        resp = await client.get("/v1/public/wiki/alice-html-asset/assets/12")
+        assert resp.status_code == 200
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert resp.headers["content-disposition"] == 'attachment; filename="tagged.html"'
 
     async def test_asset_rejects_source_doc(self, client, pool, fake_s3):
         await set_document_number(pool, DOC_A2_ID, 8)  # DOC_A2 is at path '/'

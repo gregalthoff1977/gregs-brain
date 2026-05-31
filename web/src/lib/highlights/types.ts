@@ -37,11 +37,27 @@ export interface TextAnchor {
   suffix?: string | null
 }
 
+export interface PdfRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PdfAnchor {
+  page: number
+  textContent: string
+  prefix?: string | null
+  suffix?: string | null
+  rects: PdfRect[]
+}
+
 export interface Highlight {
   id: string
   type: 'text' | 'pdf'
   anchor?: DomAnchor | null
   textAnchor?: TextAnchor | null
+  pdfAnchor?: PdfAnchor | null
   comment: string | null
   color: string
   createdAt: string

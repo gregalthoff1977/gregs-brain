@@ -13,3 +13,5 @@ aiohttp==3.13.5
 python-multipart==0.0.28
 requests==2.33.1
 urllib3==2.7.0
+starlette>=1.0.1
+idna>=3.15

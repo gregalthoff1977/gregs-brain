@@ -248,6 +248,26 @@ _DOC_COLUMNS = (
     "version, document_number, archived, created_at, updated_at"
 )
 
+_WEBCLIP_ROOT = "/webclipper/"
+
+
+def _normalize_webclip_path(path: str | None) -> str:
+    missing = path is None or not path.strip()
+    raw = _WEBCLIP_ROOT if missing else path.strip()
+    if "\\" in raw or "\x00" in raw:
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    raw = "/" + raw.strip("/") + "/"
+    raw = re.sub(r"/+", "/", raw)
+    parts = [p for p in raw.split("/") if p]
+    if not parts and not missing:
+        raise HTTPException(status_code=400, detail="Web clips must be stored under /webclipper/")
+    if any(p in {".", ".."} for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    normalized = "/" + "/".join(parts) + "/" if parts else _WEBCLIP_ROOT
+    if normalized != _WEBCLIP_ROOT and not normalized.startswith(_WEBCLIP_ROOT):
+        raise HTTPException(status_code=400, detail="Web clips must be stored under /webclipper/")
+    return normalized
+
 
 class HostedDocumentService(DocumentService):
 
@@ -260,13 +280,19 @@ class HostedDocumentService(DocumentService):
         if path:
             rows = await self.pool.fetch(
                 f"SELECT {_DOC_COLUMNS} FROM documents "
-                "WHERE knowledge_base_id = $1 AND archived = false AND path = $2 AND user_id = $3 ORDER BY filename",
+                "WHERE knowledge_base_id = $1 AND archived = false AND path = $2 AND user_id = $3 "
+                "AND COALESCE(metadata->>'hidden', 'false') <> 'true' "
+                "AND COALESCE(metadata->>'asset', 'false') <> 'true' "
+                "ORDER BY filename",
                 kb_id, path, self.user_id,
             )
         else:
             rows = await self.pool.fetch(
                 f"SELECT {_DOC_COLUMNS} FROM documents "
-                "WHERE knowledge_base_id = $1 AND archived = false AND user_id = $2 ORDER BY filename",
+                "WHERE knowledge_base_id = $1 AND archived = false AND user_id = $2 "
+                "AND COALESCE(metadata->>'hidden', 'false') <> 'true' "
+                "AND COALESCE(metadata->>'asset', 'false') <> 'true' "
+                "ORDER BY filename",
                 kb_id, self.user_id,
             )
         return [dict(r) for r in rows]
@@ -339,17 +365,18 @@ class HostedDocumentService(DocumentService):
 
     async def create_web_clip(
         self, kb_id: str, url: str, title: str, html: str,
-        highlights: list[dict] | None = None,
+        highlights: list[dict] | None = None, path: str = "/webclipper/",
     ) -> dict:
         from html_parser import Parser
 
         await self._validate_kb(kb_id)
+        path = _normalize_webclip_path(path)
 
         parser = Parser(html, url=url, content_only=True)
         result = parser.parse(highlights=highlights or [])
 
         filename = self._slugify_filename(title, "md")
-        filename = await self._dedupe_filename(kb_id, "/webclipper/", filename, "md")
+        filename = await self._dedupe_filename(kb_id, path, filename, "md")
         stem = filename.rsplit(".", 1)[0]
         markdown, assets = await materialize_webclip_assets(
             result.content,
@@ -390,9 +417,9 @@ class HostedDocumentService(DocumentService):
                 row = await conn.fetchrow(
                     f"INSERT INTO documents (id, knowledge_base_id, user_id, filename, path, title, "
                     f"file_type, file_size, status, content, tags, metadata, highlights) "
-                    f"VALUES ($1, $2, $3, $4, '/webclipper/', $5, 'md', $6, 'ready', $7, $8, $9, $10::jsonb) "
+                    f"VALUES ($1, $2, $3, $4, $5, $6, 'md', $7, 'ready', $8, $9, $10, $11::jsonb) "
                     f"RETURNING {_DOC_COLUMNS}",
-                    parent_doc_id, kb_id, self.user_id, filename, title, markdown_size, markdown,
+                    parent_doc_id, kb_id, self.user_id, filename, path, title, markdown_size, markdown,
                     [], json.dumps(parent_metadata), highlights_json,
                 )
                 for asset in assets:
@@ -404,7 +431,7 @@ class HostedDocumentService(DocumentService):
                         kb_id,
                         self.user_id,
                         asset.filename,
-                        f"/webclipper/{stem}.assets/",
+                        f"{path}{stem}.assets/",
                         asset.filename,
                         asset.file_type,
                         len(asset.data),
@@ -458,6 +485,7 @@ class HostedDocumentService(DocumentService):
             "FROM documents "
             "WHERE user_id = $1 AND NOT archived "
             "AND metadata->>'source_url' = $2 "
+            "AND COALESCE(metadata->>'asset', 'false') <> 'true' "
             "ORDER BY updated_at DESC LIMIT 1",
             self.user_id, url,
         )

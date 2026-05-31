@@ -19,20 +19,28 @@ export interface MarkdownExtensionOptions {
   /** Optional resolver for image src — receives the stored relative src,
    *  returns the URL to display. Used in 2D for relative image refs. */
   imageSrcResolver?: (src: string) => string
+  /** Optional rendered attributes for an image. Used by web clips to preserve
+   *  source display dimensions without writing signed URLs into Markdown. */
+  imageAttrsResolver?: (src: string) => Record<string, unknown>
 }
 
 export function createMarkdownExtensions(options?: MarkdownExtensionOptions) {
-  const ImageExt = options?.imageSrcResolver
+  const ImageExt = options?.imageSrcResolver || options?.imageAttrsResolver
     ? Image.extend({
         renderHTML({ HTMLAttributes }) {
           const original = (HTMLAttributes.src as string | undefined) ?? ''
-          const resolved = original ? options.imageSrcResolver!(original) : original
+          const resolved = original && options.imageSrcResolver
+            ? options.imageSrcResolver(original)
+            : original
+          const extraAttrs = original && options.imageAttrsResolver
+            ? options.imageAttrsResolver(original)
+            : {}
           // Preserve the original relative src in `data-src` so the storage
           // round-trip stays clean — only the rendered DOM gets the resolved
           // (possibly signed) URL. mergeAttributes properly merges class/style.
           return [
             'img',
-            mergeAttributes(HTMLAttributes, { src: resolved, 'data-src': original }),
+            mergeAttributes(HTMLAttributes, extraAttrs, { src: resolved, 'data-src': original }),
           ]
         },
       })

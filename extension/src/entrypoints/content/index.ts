@@ -12,12 +12,22 @@ import {
 import type { Highlight } from "@/lib/api";
 import {
   deleteHighlight,
+  fetchKnowledgeBases,
   getDocumentByUrl,
   getHighlights,
   replaceHighlights,
+  saveWebPage,
   upsertHighlight,
 } from "@/lib/api";
-import { getApiUrl } from "@/lib/settings";
+import {
+  getMode,
+  getApiUrl,
+  getSelectedFolderPath,
+  getSelectedKnowledgeBaseId,
+  isDomainDisabled,
+  setSelectedKnowledgeBaseId,
+  type Mode,
+} from "@/lib/settings";
 
 export default defineContentScript({
   matches: ["<all_urls>"],
@@ -25,11 +35,23 @@ export default defineContentScript({
   cssInjectionMode: "manifest",
   async main() {
     if (isRestrictedPage()) return;
+    if (isLlmWikiAppPage()) return;
+    if (await isDomainDisabled(location.hostname)) return;
     new HighlightController();
   },
 });
 
+function isLlmWikiAppPage(): boolean {
+  // The wiki ships its own in-app highlight UI; the extension must not double up.
+  // Detection is via a meta tag in the wiki's root layout so this works on prod,
+  // localhost, and any future deploy host without hostname allowlists.
+  return !!document.querySelector('meta[name="llmwiki-app"]');
+}
+
 const STYLE_ID = "llmwiki-highlight-style";
+const MAX_INLINE_IMAGES = 12;
+const MAX_INLINE_IMAGE_BYTES = 2_500_000;
+const MAX_INLINE_TOTAL_BYTES = 6_000_000;
 
 function injectStyle(): void {
   if (document.getElementById(STYLE_ID)) return;
@@ -216,10 +238,33 @@ function canonicalizeUrl(href: string): string {
   }
 }
 
+function largestSrcsetUrl(srcset: string): string {
+  let bestUrl = "";
+  let bestWidth = 0;
+  for (const raw of srcset.split(",")) {
+    const parts = raw.trim().split(/\s+/);
+    if (!parts[0]) continue;
+    const width = parts[1]?.endsWith("w")
+      ? Number.parseInt(parts[1], 10)
+      : 0;
+    if (!bestUrl || width > bestWidth) {
+      bestUrl = parts[0];
+      bestWidth = width;
+    }
+  }
+  try {
+    return bestUrl ? new URL(bestUrl, location.href).toString() : "";
+  } catch {
+    return bestUrl;
+  }
+}
+
 class HighlightController {
   private highlights: Highlight[] = [];
   private documentId: string | null = null;
   private knowledgeBaseId: string | null = null;
+  private folderPath = "/webclipper/";
+  private mode: Mode = "cloud";
   private version: number | null = null;
   private apiUrl: string | null = null;
   private accessToken: string | null = null;
@@ -228,6 +273,8 @@ class HighlightController {
   private saveTimer: number | null = null;
   private toastTimer: number | null = null;
   private isSaving = false;
+  private autoSavePromise: Promise<boolean> | null = null;
+  private autoSaveIncludedHighlightIds = new Set<string>();
 
   constructor() {
     injectStyle();
@@ -248,12 +295,14 @@ class HighlightController {
 
   private async bootstrap() {
     try {
+      this.mode = await getMode();
       this.apiUrl = await getApiUrl();
+      this.knowledgeBaseId = await getSelectedKnowledgeBaseId();
+      this.folderPath = await getSelectedFolderPath();
       await this.ensureSession();
-      // No token → user hasn't signed in. Highlight UI still works locally;
-      // network sync starts once they sign in via the popup. Don't call the
-      // API and don't log noise on every page load.
-      if (!this.accessToken) return;
+      // In cloud mode, no token means the user is signed out. Keep the page
+      // untouched until they sign in. Local mode is intentionally unauthenticated.
+      if (this.mode !== "local" && !this.accessToken) return;
       const url = canonicalizeUrl(location.href);
       let doc;
       try {
@@ -279,7 +328,7 @@ class HighlightController {
     }
   }
 
-  private async refreshAfterSave(documentId: string) {
+  private async refreshAfterSave(documentId: string, flushPending = true) {
     if (!this.apiUrl) return;
     this.documentId = documentId;
     await this.ensureSession();
@@ -294,7 +343,7 @@ class HighlightController {
       this.version = 0;
     }
     // Flush any pending in-memory highlights that were captured pre-save
-    if (this.highlights.length) this.scheduleSave();
+    if (flushPending && this.highlights.length) this.scheduleSave();
   }
 
   private onRuntimeMessage = (msg: { type: string; documentId?: string }, _sender: any, sendResponse: (r: unknown) => void) => {
@@ -341,6 +390,12 @@ class HighlightController {
   };
 
   private maybeShowPill() {
+    if (this.mode !== "local" && !this.accessToken) {
+      void this.ensureSession().then((token) => {
+        if (token) this.maybeShowPill();
+      });
+      return;
+    }
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
     const range = sel.getRangeAt(0);
@@ -403,7 +458,7 @@ class HighlightController {
     // pass can attempt text-scan resolution into a single text node.
     this.highlights.push(highlight);
     window.getSelection()?.removeAllRanges();
-    this.persistHighlight(highlight);
+    this.persistHighlight(highlight, "Highlight saved");
     if (withNote && wrapped) {
       const mark = findMark(highlight.id);
       if (mark) this.openPopoverForExisting(highlight.id, mark);
@@ -562,21 +617,184 @@ class HighlightController {
     }, 1800);
   }
 
+  private async captureCleanHtml(): Promise<string> {
+    const clone = document.documentElement.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll(
+      ".llmwiki-pill, .llmwiki-popover, .llmwiki-toast, #llmwiki-highlight-style",
+    ).forEach((el) => el.remove());
+    clone.querySelectorAll(`mark.${HIGHLIGHT_CLASS}`).forEach((mark) => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+    });
+
+    await this.inlineLoadedImages(clone);
+    return clone.outerHTML;
+  }
+
+  private async inlineLoadedImages(clone: HTMLElement): Promise<void> {
+    const liveImages = Array.from(document.images);
+    const cloneImages = Array.from(clone.querySelectorAll("img"));
+    const candidates = liveImages
+      .map((img, index) => {
+        const rect = img.getBoundingClientRect();
+        const width = Math.round(rect.width || img.naturalWidth || 0);
+        const height = Math.round(rect.height || img.naturalHeight || 0);
+        const src = img.currentSrc || img.src || largestSrcsetUrl(img.srcset) || "";
+        const inArticle = !!img.closest("article, main, [role='main']");
+        return {
+          index,
+          src,
+          width,
+          height,
+          score: (inArticle ? 10_000_000 : 0) + width * height,
+        };
+      })
+      .filter((item) => {
+        if (!item.src || item.src.startsWith("data:") || item.src.startsWith("blob:")) return false;
+        if (!/^https?:\/\//i.test(item.src)) return false;
+        return item.width >= 80 && item.height >= 50;
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_INLINE_IMAGES);
+
+    let totalBytes = 0;
+    for (const item of candidates) {
+      if (totalBytes >= MAX_INLINE_TOTAL_BYTES) break;
+      const maxBytes = Math.min(MAX_INLINE_IMAGE_BYTES, MAX_INLINE_TOTAL_BYTES - totalBytes);
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "FETCH_IMAGE_DATA_URL",
+          url: item.src,
+          maxBytes,
+        });
+        if (!response?.dataUrl || response?.error) continue;
+        totalBytes += response.size ?? 0;
+        const cloneImg = cloneImages[item.index];
+        if (!cloneImg) continue;
+        cloneImg.setAttribute("src", response.dataUrl);
+        cloneImg.removeAttribute("srcset");
+        cloneImg.removeAttribute("sizes");
+        if (item.width) cloneImg.setAttribute("width", String(item.width));
+        if (item.height) cloneImg.setAttribute("height", String(item.height));
+        cloneImg.setAttribute("data-llmwiki-inlined-image", "true");
+      } catch {
+        // Leave the original URL in place so the API can still try server-side.
+      }
+    }
+  }
+
+  private async resolveKnowledgeBaseId(): Promise<string | null> {
+    if (this.knowledgeBaseId) return this.knowledgeBaseId;
+
+    const stored = await getSelectedKnowledgeBaseId();
+    if (stored) {
+      this.knowledgeBaseId = stored;
+      return stored;
+    }
+
+    if (!this.apiUrl) return null;
+    const list = await fetchKnowledgeBases(this.apiUrl, this.accessToken);
+    const first = list[0]?.id ?? null;
+    if (first) {
+      this.knowledgeBaseId = first;
+      await setSelectedKnowledgeBaseId(first);
+    }
+    return first;
+  }
+
+  private async ensureDocumentSavedForHighlights(): Promise<boolean> {
+    if (this.documentId) return true;
+    if (this.autoSavePromise) return this.autoSavePromise;
+
+    this.autoSavePromise = this.createDocumentFromCurrentPage()
+      .finally(() => {
+        this.autoSavePromise = null;
+      });
+    return this.autoSavePromise;
+  }
+
+  private async createDocumentFromCurrentPage(): Promise<boolean> {
+    try {
+      this.apiUrl = this.apiUrl ?? await getApiUrl();
+      await this.ensureSession();
+      if (this.mode !== "local" && !this.accessToken) {
+        this.showToast("Sign in to save highlights");
+        return false;
+      }
+
+      const knowledgeBaseId = await this.resolveKnowledgeBaseId();
+      if (!knowledgeBaseId) {
+        this.showToast("Choose a knowledge base first");
+        return false;
+      }
+
+      this.showToast("Saving article...");
+      const highlightsToSave = this.highlights.length ? [...this.highlights] : [];
+      this.autoSaveIncludedHighlightIds = new Set(highlightsToSave.map((h) => h.id));
+      const result = await saveWebPage(this.apiUrl, this.accessToken, knowledgeBaseId, {
+        url: canonicalizeUrl(location.href),
+        title: document.title || location.href,
+        path: this.folderPath,
+        html: await this.captureCleanHtml(),
+        highlights: highlightsToSave.length ? highlightsToSave : undefined,
+      });
+      this.knowledgeBaseId = knowledgeBaseId;
+      this.documentId = result.id;
+      await this.refreshAfterSave(result.id, false);
+      this.showToast("Article saved with highlight");
+      return true;
+    } catch (err) {
+      console.warn("[llmwiki] auto-save failed:", err);
+      this.showToast("Could not save highlight");
+      return false;
+    }
+  }
+
   private async persistHighlight(highlight: Highlight, successMessage?: string) {
-    if (!this.documentId || !this.apiUrl) {
-      if (successMessage) this.showToast("Comment added");
+    const hadDocument = !!this.documentId;
+    if (!this.documentId) {
+      const saved = await this.ensureDocumentSavedForHighlights();
+      if (!saved || !this.documentId) {
+        return;
+      }
+      // create_web_clip enriches initial highlights with textAnchor for the
+      // TipTap renderer. Re-posting the original browser highlight would
+      // replace that enriched copy and drop textAnchor, so skip only the
+      // highlight event that was part of the initial autosave payload.
+      if (
+        successMessage === "Highlight saved" &&
+        this.autoSaveIncludedHighlightIds.has(highlight.id)
+      ) {
+        return;
+      }
+    }
+
+    if (!this.apiUrl) {
+      if (successMessage) this.showToast(successMessage);
       return;
     }
     try {
       await this.ensureSession();
+      const existing = this.highlights.find((h) => h.id === highlight.id);
+      const payload = existing
+        ? {
+            ...existing,
+            ...highlight,
+            textAnchor: highlight.textAnchor ?? existing.textAnchor,
+          }
+        : highlight;
       const result = await upsertHighlight(
         this.apiUrl,
         this.accessToken,
         this.documentId,
-        highlight,
+        payload,
       );
       this.mergeServerHighlights(result);
-      if (successMessage) this.showToast(successMessage);
+      if (successMessage && (hadDocument || successMessage !== "Highlight saved")) {
+        this.showToast(successMessage);
+      }
     } catch (err) {
       console.warn("[llmwiki] save highlight failed:", err);
       this.scheduleSave();
@@ -618,6 +836,7 @@ class HighlightController {
     }
     this.isSaving = true;
     try {
+      await this.ensureSession();
       const result = await replaceHighlights(
         this.apiUrl,
         this.accessToken,

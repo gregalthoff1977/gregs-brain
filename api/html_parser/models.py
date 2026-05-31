@@ -18,6 +18,9 @@ class Image:
     url: str
     alt: str = ""
     ref: str = ""
+    width: Optional[int] = None
+    height: Optional[int] = None
+    candidate_urls: List[str] = field(default_factory=list)
 
 
 @dataclass

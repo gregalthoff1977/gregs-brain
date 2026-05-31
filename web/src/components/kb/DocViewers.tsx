@@ -50,7 +50,7 @@ export function PdfDocViewer({ documentId, title, initialPage, hideToolbar }: { 
   const { url, error } = useDocumentUrl(documentId)
   if (error) return <ErrorMessage message="Failed to load PDF" />
   if (!url) return <LoadingSpinner />
-  return <PdfViewer fileUrl={url} title={title} initialPage={initialPage} hideToolbar={hideToolbar} />
+  return <PdfViewer fileUrl={url} documentId={documentId} title={title} initialPage={initialPage} hideToolbar={hideToolbar} />
 }
 
 export function ImageViewer({ documentId, title }: { documentId: string; title: string }) {

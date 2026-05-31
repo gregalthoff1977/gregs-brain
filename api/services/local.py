@@ -127,6 +127,27 @@ def _doc_to_disk_path(doc: dict) -> Path | None:
     return resolved if resolved.is_relative_to(ws) else None
 
 
+_WEBCLIP_ROOT = "/webclipper/"
+
+
+def _normalize_webclip_path(path: str | None) -> str:
+    missing = path is None or not path.strip()
+    raw = _WEBCLIP_ROOT if missing else path.strip()
+    if "\\" in raw or "\x00" in raw:
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    raw = "/" + raw.strip("/") + "/"
+    raw = re.sub(r"/+", "/", raw)
+    parts = [p for p in raw.split("/") if p]
+    if not parts and not missing:
+        raise HTTPException(status_code=400, detail="Web clips must be stored under /webclipper/")
+    if any(p in {".", ".."} for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    normalized = "/" + "/".join(parts) + "/" if parts else _WEBCLIP_ROOT
+    if normalized != _WEBCLIP_ROOT and not normalized.startswith(_WEBCLIP_ROOT):
+        raise HTTPException(status_code=400, detail="Web clips must be stored under /webclipper/")
+    return normalized
+
+
 def _merge_text_anchors(payloads: list[dict], mapped) -> list[dict]:
     """Same as the hosted helper — merge parser-computed text_anchors back
     onto incoming highlight payloads."""
@@ -209,25 +230,27 @@ class LocalDocumentService(DocumentService):
 
     async def create_web_clip(
         self, kb_id: str, url: str, title: str, html: str,
-        highlights: list[dict] | None = None,
+        highlights: list[dict] | None = None, path: str = "/webclipper/",
     ) -> dict:
         from html_parser import Parser
 
+        path = _normalize_webclip_path(path)
         parser = Parser(html, url=url, content_only=True)
         result = parser.parse(highlights=highlights or [])
         markdown = result.content
 
         base_name = re.sub(r"[^\w\s\-.]", "", title.lower().replace(" ", "-"))[:80].strip("-._")
         filename = f"{base_name or 'web-clip'}.md"
-        path = "/webclipper/"
 
-        relative = f"webclipper/{filename}"
+        relative_dir = path.strip("/")
+        relative = f"{relative_dir}/{filename}" if relative_dir else filename
         file_path = _safe_resolve(relative)
         if file_path.exists():
             base = filename.rsplit(".", 1)[0]
             for i in range(2, 100):
                 candidate = f"{base}-{i}.md"
-                candidate_path = _safe_resolve(f"webclipper/{candidate}")
+                candidate_relative = f"{relative_dir}/{candidate}" if relative_dir else candidate
+                candidate_path = _safe_resolve(candidate_relative)
                 if not candidate_path.exists():
                     filename = candidate
                     file_path = candidate_path
@@ -252,8 +275,8 @@ class LocalDocumentService(DocumentService):
         for asset in assets:
             asset_id = str(uuid.uuid4())
             asset.document_id = asset_id
-            asset_path = f"/webclipper/{asset_dir_name}/"
-            relative_asset = f"webclipper/{asset.src}"
+            asset_path = f"{path}{asset_dir_name}/"
+            relative_asset = f"{relative_dir}/{asset.src}" if relative_dir else asset.src
             local_asset = _safe_resolve(relative_asset)
             local_asset.parent.mkdir(parents=True, exist_ok=True)
             mark_written(str(local_asset))

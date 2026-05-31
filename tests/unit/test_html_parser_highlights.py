@@ -188,6 +188,146 @@ async def test_webclip_image_materialization_rewrites_markdown_to_relative_asset
     assert assets[0].content_type == "image/png"
 
 
+@pytest.mark.asyncio
+async def test_webclip_image_materialization_preserves_source_dimensions():
+    from services.webclip_assets import materialize_webclip_assets
+
+    png_1x1 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    html = (
+        f'<img alt="Inline logo" width="42" height="24" '
+        f'src="data:image/png;base64,{png_1x1}">'
+    )
+    result = Parser(html, url="https://source.example/post").parse()
+
+    _, assets = await materialize_webclip_assets(
+        result.content,
+        result.images,
+        "article.assets",
+    )
+
+    assert assets[0].metadata()["width"] == 42
+    assert assets[0].metadata()["height"] == 24
+
+
+def test_parser_prefers_srcset_candidates_over_placeholder_src():
+    html = """
+    <img
+      src="https://cdn.example/image/-1x-1.webp"
+      srcset="https://cdn.example/image/220x147.webp 220w,
+              https://cdn.example/image/1200x801.webp 1200w"
+      alt="Hero"
+    />
+    """
+
+    result = Parser(html, url="https://source.example/post").parse()
+
+    assert result.images[0].candidate_urls[0] == "https://cdn.example/image/1200x801.webp"
+    assert result.images[0].candidate_urls[-1] == "https://cdn.example/image/-1x-1.webp"
+    assert result.images[0].width == 1200
+    assert result.images[0].height == 801
+
+
+@pytest.mark.asyncio
+async def test_webclip_asset_materialization_drops_non_inlined_remote_images(monkeypatch):
+    from html_parser.models import Image
+    from services import webclip_assets
+    from services.webclip_assets import materialize_webclip_assets
+
+    calls: list[str] = []
+
+    async def fake_fetch(url: str):
+        calls.append(url)
+        raise AssertionError("remote image URLs must not be fetched server-side")
+
+    monkeypatch.setattr(webclip_assets, "_fetch_image", fake_fetch)
+
+    markdown, assets = await materialize_webclip_assets(
+        "![Hero](llmwiki-image://IMG1)",
+        [
+            Image(
+                url="https://cdn.example/image/-1x-1.webp",
+                alt="Hero",
+                ref="IMG1",
+                candidate_urls=[
+                    "https://cdn.example/image/-1x-1.webp",
+                    "https://cdn.example/image/1200x801.webp",
+                ],
+            )
+        ],
+        "article.assets",
+    )
+
+    assert calls == []
+    assert markdown == "![Hero]()"
+    assert assets == []
+
+
+@pytest.mark.asyncio
+async def test_webclip_asset_materialization_rejects_mismatched_image_bytes():
+    from html_parser.models import Image
+    from services.webclip_assets import materialize_webclip_assets
+
+    markdown, assets = await materialize_webclip_assets(
+        "![Logo](llmwiki-image://IMG1)",
+        [
+            Image(
+                url="data:image/png;base64,bm90LWFjdHVhbGx5LXBuZw==",
+                alt="Logo",
+                ref="IMG1",
+            )
+        ],
+        "article.assets",
+    )
+
+    assert markdown == "![Logo]()"
+    assert assets == []
+
+
+@pytest.mark.asyncio
+async def test_webclip_asset_materialization_caps_image_count():
+    from html_parser.models import Image
+    from services.webclip_assets import materialize_webclip_assets
+
+    png_1x1 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    images = [
+        Image(
+            url=f"data:image/png;base64,{png_1x1}",
+            alt=f"image {i}",
+            ref=f"IMG{i}",
+        )
+        for i in range(20)
+    ]
+    markdown = "\n".join(f"![Image {i}](llmwiki-image://IMG{i})" for i in range(20))
+
+    rewritten, assets = await materialize_webclip_assets(
+        markdown,
+        images,
+        "article.assets",
+    )
+
+    assert len(assets) == 12
+    assert "llmwiki-image://IMG11" not in rewritten
+    assert "![Image 11](./article.assets/image-12.png)" in rewritten
+    assert "![Image 12]()" in rewritten
+
+
+def test_webclip_path_normalization_restricts_to_webclipper_root():
+    from fastapi import HTTPException
+    from services.hosted import _normalize_webclip_path
+
+    assert _normalize_webclip_path(None) == "/webclipper/"
+    assert _normalize_webclip_path("webclipper/research") == "/webclipper/research/"
+    assert _normalize_webclip_path("/webclipper//research/") == "/webclipper/research/"
+
+    for bad_path in ["/", "/wiki/", "/sources/", "/webclipper/../wiki/", "/webclipper\\x"]:
+        with pytest.raises(HTTPException):
+            _normalize_webclip_path(bad_path)
+
+
 def test_parser_instances_are_single_use():
     parser = Parser(
         "<p>x</p>",
@@ -230,8 +370,8 @@ async def test_hosted_webclip_records_storage_size_for_markdown_artifact():
                     "knowledge_base_id": args[1],
                     "user_id": args[2],
                     "filename": args[3],
-                    "path": "/webclipper/",
-                    "title": args[4],
+                    "path": args[4],
+                    "title": args[5],
                     "file_type": "md",
                     "status": "ready",
                     "tags": [],
@@ -273,7 +413,8 @@ async def test_hosted_webclip_records_storage_size_for_markdown_artifact():
     await service.create_web_clip("kb-a", "https://example.com", "Title", "<p>Hello</p>")
 
     assert pool.conn.insert_args is not None
-    file_size = pool.conn.insert_args[5]
+    assert pool.conn.insert_args[4] == "/webclipper/"
+    file_size = pool.conn.insert_args[6]
     assert isinstance(file_size, int)
     assert file_size > 0
 

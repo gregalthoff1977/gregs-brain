@@ -344,7 +344,9 @@
 /* Tiptap images */
 .ProseMirror img {
   max-width: 100%;
+  max-height: 560px;
   height: auto;
+  object-fit: contain;
   border-radius: var(--radius-md);
   margin: 0.75rem 0;
 }

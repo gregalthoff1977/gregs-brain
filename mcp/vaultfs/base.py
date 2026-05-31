@@ -58,6 +58,9 @@ class VaultFS(ABC):
     async def load_image_bytes(self, doc_id: str, image_id: str) -> bytes | None: ...
 
     @abstractmethod
+    async def load_asset_bytes(self, asset_doc_id: str) -> bytes | None: ...
+
+    @abstractmethod
     def write_to_disk(self, dir_path: str, filename: str, content: str) -> bool: ...
 
     @abstractmethod

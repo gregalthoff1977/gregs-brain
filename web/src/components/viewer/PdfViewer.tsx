@@ -1,11 +1,15 @@
 'use client'
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Document, Page } from 'react-pdf'
-import { ChevronUp, ChevronDown, Search, X, Download, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronUp, ChevronDown, Search, X, Download, ZoomIn, ZoomOut, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ensurePdfWorker } from '@/lib/pdfjs'
+import { apiFetch } from '@/lib/api'
+import { useUserStore } from '@/stores'
+import type { Highlight, HighlightsResponse, PdfAnchor } from '@/lib/highlights/types'
+import { computePdfAnchor, pdfRectsToViewport } from '@/lib/highlights/pdfAnchor'
 
 import 'react-pdf/dist/Page/TextLayer.css'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
@@ -14,15 +18,21 @@ ensurePdfWorker()
 
 type Props = {
   fileUrl: string
+  documentId?: string
   title?: string
   className?: string
   initialPage?: number
   hideToolbar?: boolean
 }
 
+function createHighlightId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `hl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 const VIRTUALIZE_BUFFER = 2
 
-export default function PdfViewer({ fileUrl, title, className, initialPage, hideToolbar }: Props) {
+export default function PdfViewer({ fileUrl, documentId, title, className, initialPage, hideToolbar }: Props) {
   const [numPages, setNumPages] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -209,11 +219,319 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
     return () => observer.disconnect()
   }, [numPages])
 
+  // Page proxies in state so highlight overlays re-render the moment a
+  // proxy becomes available (no global render-version counter needed).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [pageProxies, setPageProxies] = useState<Map<number, any>>(() => new Map())
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const onPageLoadSuccess = useCallback((pageNumber: number, page: any) => {
     const vp = page.getViewport({ scale: 1 })
     pageAspectRef.current.set(pageNumber, vp.height / vp.width)
+    setPageProxies((prev) => {
+      if (prev.get(pageNumber) === page) return prev
+      const next = new Map(prev)
+      next.set(pageNumber, page)
+      return next
+    })
   }, [])
+
+  // ─── Highlights ────────────────────────────────────────────────────
+  const token = useUserStore((s) => s.accessToken)
+  const [highlights, setHighlights] = useState<Highlight[]>([])
+  type PopoverState =
+    | {
+        mode: 'create'
+        pageNumber: number
+        anchor: { textContent: string; prefix: string | null; suffix: string | null; rects: PdfAnchor['rects'] }
+        position: { left: number; top: number }
+      }
+    | {
+        mode: 'edit'
+        pageNumber: number
+        highlight: Highlight
+        position: { left: number; top: number }
+      }
+  const [popover, setPopover] = useState<PopoverState | null>(null)
+  const [commentDraft, setCommentDraft] = useState('')
+  const [commentExpanded, setCommentExpanded] = useState(false)
+  const [savingHighlight, setSavingHighlight] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('llmwiki.pdfHighlightsDrawer') === '1'
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('llmwiki.pdfHighlightsDrawer', drawerOpen ? '1' : '0')
+  }, [drawerOpen])
+
+  useEffect(() => {
+    if (!notice) return
+    const id = window.setTimeout(() => setNotice(null), 2400)
+    return () => window.clearTimeout(id)
+  }, [notice])
+
+  useEffect(() => {
+    if (!documentId || !token) return
+    let cancelled = false
+    apiFetch<HighlightsResponse>(`/v1/documents/${documentId}/highlights`, token)
+      .then((res) => { if (!cancelled) setHighlights(res.highlights ?? []) })
+      .catch(() => { /* non-fatal */ })
+    return () => { cancelled = true }
+  }, [documentId, token])
+
+  const pdfHighlightsByPage = useMemo(() => {
+    const m = new Map<number, Highlight[]>()
+    for (const h of highlights) {
+      if (h.type !== 'pdf' || !h.pdfAnchor) continue
+      const list = m.get(h.pdfAnchor.page) ?? []
+      list.push(h)
+      m.set(h.pdfAnchor.page, list)
+    }
+    return m
+  }, [highlights])
+
+  const pdfHighlightsSorted = useMemo(() => {
+    return highlights
+      .filter((h): h is Highlight & { pdfAnchor: PdfAnchor } => h.type === 'pdf' && !!h.pdfAnchor)
+      .sort((a, b) => a.pdfAnchor.page - b.pdfAnchor.page || a.createdAt.localeCompare(b.createdAt))
+  }, [highlights])
+
+  const pdfHighlightCount = pdfHighlightsSorted.length
+
+  const handlePageMouseUp = useCallback(
+    (pageNumber: number, pageEl: HTMLDivElement) => {
+      if (!documentId || !token) return
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
+      const range = sel.getRangeAt(0)
+
+      // Cross-page guard: both selection endpoints must live inside this
+      // page wrapper. `commonAncestorContainer` would walk to a shared
+      // ancestor *above* both pages when selecting across pages, so anchor
+      // + focus node containment is the reliable check.
+      const anchorNode = sel.anchorNode
+      const focusNode = sel.focusNode
+      const inThisPage = (node: Node | null) => !!node && pageEl.contains(node)
+      if (!inThisPage(anchorNode) || !inThisPage(focusNode)) {
+        // If either endpoint is in a different page wrapper, surface the
+        // toast. Otherwise the selection isn't ours — silent return.
+        const otherPageWrapper =
+          [anchorNode, focusNode].find(
+            (n) => n && !inThisPage(n) && (n as HTMLElement).closest?.('[data-page]') !== null,
+          ) ?? null
+        if (otherPageWrapper) setNotice('Highlight must stay on one page')
+        return
+      }
+
+      const proxy = pageProxies.get(pageNumber)
+      if (!proxy) return
+      const viewport = proxy.getViewport({ scale })
+      const pageText = pageTexts.get(pageNumber) ?? ''
+      const computed = computePdfAnchor({ range, viewport, pageContainer: pageEl, pageText })
+      if (!computed) return
+
+      // Position the popover under the last visual line of the selection.
+      // Use pdfRectsToViewport so the rect is already y-axis-normalized,
+      // not the raw convertToViewportRectangle tuple (which can land at the
+      // top of the line after PDF's bottom-left origin flip).
+      const lastRect = computed.rects[computed.rects.length - 1]
+      const [vpRect] = pdfRectsToViewport([lastRect], viewport)
+      setPopover({
+        mode: 'create',
+        pageNumber,
+        anchor: computed,
+        position: {
+          left: Math.min(Math.max(0, vpRect.left), Math.max(0, viewport.width - 240)),
+          top: Math.max(0, vpRect.top + vpRect.height + 6),
+        },
+      })
+      setCommentDraft('')
+      setCommentExpanded(false)
+    },
+    [documentId, pageProxies, pageTexts, scale, token],
+  )
+
+  const handleHighlightClick = useCallback(
+    (highlight: Highlight) => {
+      if (!highlight.pdfAnchor) return
+      const proxy = pageProxies.get(highlight.pdfAnchor.page)
+      if (!proxy) return
+      const viewport = proxy.getViewport({ scale })
+      const [vpRect] = pdfRectsToViewport([highlight.pdfAnchor.rects[0]], viewport)
+      setPopover({
+        mode: 'edit',
+        pageNumber: highlight.pdfAnchor.page,
+        highlight,
+        position: {
+          left: Math.min(Math.max(0, vpRect.left), Math.max(0, viewport.width - 240)),
+          top: Math.max(0, vpRect.top + vpRect.height + 6),
+        },
+      })
+      setCommentDraft(highlight.comment ?? '')
+      // Compact pill on overlay click ([Note] [Delete]); user expands to
+      // textarea only when they actually want to edit the note.
+      setCommentExpanded(false)
+    },
+    [pageProxies, scale],
+  )
+
+  // "Note" pressed in CREATE mode: save the highlight immediately so the
+  // yellow rect renders, then switch the popover to edit-expanded for that
+  // just-saved highlight so the user can type their note on top of it.
+  const startNoteFromCreate = useCallback(async () => {
+    if (!documentId || !token || !popover || popover.mode !== 'create' || savingHighlight) return
+    setSavingHighlight(true)
+    try {
+      const highlight: Highlight = {
+        id: createHighlightId(),
+        type: 'pdf',
+        anchor: null,
+        textAnchor: null,
+        pdfAnchor: {
+          page: popover.pageNumber,
+          textContent: popover.anchor.textContent,
+          prefix: popover.anchor.prefix,
+          suffix: popover.anchor.suffix,
+          rects: popover.anchor.rects,
+        },
+        comment: null,
+        color: 'yellow',
+        createdAt: new Date().toISOString(),
+      }
+      const res = await apiFetch<HighlightsResponse>(
+        `/v1/documents/${documentId}/highlights`,
+        token,
+        { method: 'POST', body: JSON.stringify({ highlight }) },
+      )
+      setHighlights(res.highlights ?? [])
+      window.getSelection()?.removeAllRanges()
+      const saved = (res.highlights ?? []).find((h) => h.id === highlight.id) ?? highlight
+      setPopover({
+        mode: 'edit',
+        pageNumber: popover.pageNumber,
+        highlight: saved,
+        position: popover.position,
+      })
+      setCommentDraft('')
+      setCommentExpanded(true)
+    } catch {
+      // Stay in create mode so the user can retry.
+    } finally {
+      setSavingHighlight(false)
+    }
+  }, [documentId, popover, savingHighlight, token])
+
+  const saveHighlight = useCallback(async () => {
+    if (!documentId || !token || !popover || savingHighlight) return
+    setSavingHighlight(true)
+    try {
+      const highlight: Highlight =
+        popover.mode === 'create'
+          ? {
+              id: createHighlightId(),
+              type: 'pdf',
+              anchor: null,
+              textAnchor: null,
+              pdfAnchor: {
+                page: popover.pageNumber,
+                textContent: popover.anchor.textContent,
+                prefix: popover.anchor.prefix,
+                suffix: popover.anchor.suffix,
+                rects: popover.anchor.rects,
+              },
+              comment: commentDraft.trim() || null,
+              color: 'yellow',
+              createdAt: new Date().toISOString(),
+            }
+          : { ...popover.highlight, comment: commentDraft.trim() || null }
+
+      const res = await apiFetch<HighlightsResponse>(
+        `/v1/documents/${documentId}/highlights`,
+        token,
+        { method: 'POST', body: JSON.stringify({ highlight }) },
+      )
+      setHighlights(res.highlights ?? [])
+      setPopover(null)
+      setCommentDraft('')
+      setCommentExpanded(false)
+      window.getSelection()?.removeAllRanges()
+    } catch {
+      // Popover stays open so user can retry; no toast infra to surface details.
+    } finally {
+      setSavingHighlight(false)
+    }
+  }, [commentDraft, documentId, popover, savingHighlight, token])
+
+  const deleteHighlight = useCallback(async () => {
+    if (!documentId || !token || !popover || popover.mode !== 'edit' || savingHighlight) return
+    setSavingHighlight(true)
+    try {
+      const res = await apiFetch<HighlightsResponse>(
+        `/v1/documents/${documentId}/highlights/${encodeURIComponent(popover.highlight.id)}`,
+        token,
+        { method: 'DELETE' },
+      )
+      setHighlights(res.highlights ?? [])
+      setPopover(null)
+      setCommentDraft('')
+      setCommentExpanded(false)
+    } catch {
+      // Same as save: leave popover open so user can retry.
+    } finally {
+      setSavingHighlight(false)
+    }
+  }, [documentId, popover, savingHighlight, token])
+
+  const cancelPopover = useCallback(() => {
+    setPopover(null)
+    setCommentDraft('')
+    setCommentExpanded(false)
+  }, [])
+
+  // Dismiss the popover on click-outside or Escape. Clicks on existing
+  // highlight overlays don't dismiss — the click handler there re-opens
+  // with a fresh edit popover anyway.
+  useEffect(() => {
+    if (!popover) return
+    const onDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null
+      if (!target) return
+      if (target.closest('.pdf-highlight-popover') || target.closest('.pdf-hl-rect')) return
+      cancelPopover()
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cancelPopover()
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [popover, cancelPopover])
+
+  const jumpToHighlight = useCallback(
+    (h: Highlight) => {
+      if (!h.pdfAnchor) return
+      const page = h.pdfAnchor.page
+      setVisiblePages((prev) => {
+        if (prev.has(page)) return prev
+        const next = new Set(prev)
+        for (let p = Math.max(1, page - VIRTUALIZE_BUFFER); p <= Math.min(numPages, page + VIRTUALIZE_BUFFER); p++) {
+          next.add(p)
+        }
+        return next
+      })
+      window.setTimeout(() => {
+        scrollToPage(page)
+        window.setTimeout(() => handleHighlightClick(h), 250)
+      }, 80)
+    },
+    [handleHighlightClick, numPages, scrollToPage],
+  )
 
   const activatePageInput = useCallback(() => {
     setPageInputValue(String(currentPage))
@@ -448,7 +766,7 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
   }, [zoomIn, zoomOut, zoomReset])
 
   return (
-    <div className={cn('flex flex-col h-full', className)}>
+    <div className={cn('relative flex flex-col h-full', className)}>
       {numPages > 0 && !hideToolbar && (
         <div className="flex items-center gap-0.5 px-4 py-1.5 border-b border-border text-xs text-muted-foreground flex-shrink-0">
           {searchOpen ? (
@@ -500,6 +818,19 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
               <button onClick={openSearch} aria-label="Find in document" className="p-1.5 rounded-md hover:text-foreground hover:bg-accent cursor-pointer" title="Find (Cmd+F)">
                 <Search className="size-3.5" />
               </button>
+              {documentId && (
+                <button
+                  onClick={() => setDrawerOpen((v) => !v)}
+                  aria-label="Highlights"
+                  className={cn(
+                    'p-1.5 rounded-md hover:text-foreground hover:bg-accent cursor-pointer',
+                    drawerOpen && 'text-foreground bg-accent',
+                  )}
+                  title={`Highlights (${pdfHighlightCount})`}
+                >
+                  <MessageSquare className="size-3.5" />
+                </button>
+              )}
               <a href={fileUrl} download className="p-1.5 rounded-md hover:text-foreground hover:bg-accent" title="Download PDF">
                 <Download className="size-3.5" />
               </a>
@@ -546,7 +877,14 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
         </div>
       )}
 
-      <div ref={containerRef} className="flex-1 overflow-auto no-scrollbar bg-muted/30">
+      {notice && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 shadow">
+          {notice}
+        </div>
+      )}
+
+      <div className="flex flex-1 min-h-0">
+      <div ref={containerRef} className="relative flex-1 overflow-auto no-scrollbar bg-muted/30">
         <div ref={pagesWrapperRef}>
           <Document
             file={fileUrl}
@@ -576,6 +914,7 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
                       if (el) pageRefs.current.set(pageNum, el)
                       else pageRefs.current.delete(pageNum)
                     }}
+                    onMouseUp={(e) => handlePageMouseUp(pageNum, e.currentTarget)}
                     className="relative mx-auto mb-4"
                     style={{
                       width: pageWidth > 0 ? pageWidth : undefined,
@@ -592,11 +931,182 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
                         onLoadSuccess={(page) => onPageLoadSuccess(pageNum, page)}
                       />
                     )}
+                    {shouldRender && documentId && (
+                      <PdfHighlightLayer
+                        scale={scale}
+                        proxy={pageProxies.get(pageNum)}
+                        highlights={pdfHighlightsByPage.get(pageNum) ?? []}
+                        onHighlightClick={handleHighlightClick}
+                      />
+                    )}
+                    {shouldRender && popover?.pageNumber === pageNum && !commentExpanded && popover.mode === 'create' && (
+                      <div
+                        className="pdf-highlight-popover absolute z-10 flex items-center gap-1 rounded-full bg-zinc-900 px-1.5 py-1 text-xs text-white shadow-lg"
+                        style={{ left: popover.position.left, top: popover.position.top }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={saveHighlight}
+                          disabled={savingHighlight}
+                          className="rounded-full px-3 py-1 font-medium hover:bg-white/10 disabled:opacity-50"
+                        >
+                          {savingHighlight ? 'Saving…' : 'Highlight'}
+                        </button>
+                        <button
+                          onClick={startNoteFromCreate}
+                          disabled={savingHighlight}
+                          className="rounded-full px-3 py-1 font-medium hover:bg-white/10 disabled:opacity-50"
+                        >
+                          Note
+                        </button>
+                      </div>
+                    )}
+                    {shouldRender && popover?.pageNumber === pageNum && !commentExpanded && popover.mode === 'edit' && !popover.highlight.comment && (
+                      <div
+                        className="pdf-highlight-popover absolute z-10 flex items-center gap-1 rounded-full bg-zinc-900 px-1.5 py-1 text-xs text-white shadow-lg"
+                        style={{ left: popover.position.left, top: popover.position.top }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={() => setCommentExpanded(true)}
+                          disabled={savingHighlight}
+                          className="rounded-full px-3 py-1 font-medium hover:bg-white/10 disabled:opacity-50"
+                        >
+                          Add note
+                        </button>
+                        <button
+                          onClick={deleteHighlight}
+                          disabled={savingHighlight}
+                          className="rounded-full px-3 py-1 font-medium text-red-300 hover:bg-white/10 disabled:opacity-50"
+                        >
+                          {savingHighlight ? 'Deleting…' : 'Delete'}
+                        </button>
+                      </div>
+                    )}
+                    {shouldRender && popover?.pageNumber === pageNum && !commentExpanded && popover.mode === 'edit' && popover.highlight.comment && (
+                      <div
+                        className="pdf-highlight-popover absolute z-10 flex flex-col gap-2 rounded-md border border-zinc-200 bg-white p-3 shadow-lg"
+                        style={{ left: popover.position.left, top: popover.position.top, width: 260 }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <p className="whitespace-pre-wrap text-xs leading-snug text-zinc-700">
+                          {popover.highlight.comment}
+                        </p>
+                        <div className="flex items-center justify-end gap-1 border-t border-zinc-100 pt-2">
+                          <button
+                            onClick={deleteHighlight}
+                            disabled={savingHighlight}
+                            className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {savingHighlight ? 'Deleting…' : 'Delete'}
+                          </button>
+                          <button
+                            onClick={() => setCommentExpanded(true)}
+                            disabled={savingHighlight}
+                            className="rounded bg-zinc-950 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {shouldRender && popover?.pageNumber === pageNum && commentExpanded && (
+                      <div
+                        className="pdf-highlight-popover absolute z-10 flex flex-col gap-2 rounded-md border border-zinc-200 bg-white p-2 shadow-lg"
+                        style={{
+                          left: popover.position.left,
+                          top: popover.position.top,
+                          width: 240,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <textarea
+                          autoFocus
+                          rows={2}
+                          placeholder="Add a comment (optional)"
+                          value={commentDraft}
+                          onChange={(e) => setCommentDraft(e.target.value)}
+                          className="w-full resize-none rounded border border-zinc-200 px-2 py-1 text-xs outline-none focus:border-zinc-400"
+                        />
+                        <div className="flex items-center justify-between gap-1">
+                          {popover.mode === 'edit' ? (
+                            <button
+                              onClick={deleteHighlight}
+                              disabled={savingHighlight}
+                              className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              Delete
+                            </button>
+                          ) : (
+                            <span />
+                          )}
+                          <div className="flex gap-1">
+                            <button
+                              onClick={cancelPopover}
+                              className="rounded px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-100"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={saveHighlight}
+                              disabled={savingHighlight}
+                              className="rounded bg-zinc-950 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              {savingHighlight ? 'Saving…' : popover.mode === 'edit' ? 'Save' : 'Highlight'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
           </Document>
         </div>
+      </div>
+
+      {documentId && drawerOpen && (
+        <aside className="hidden w-72 shrink-0 border-l border-border bg-background md:flex md:flex-col">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="text-xs font-semibold text-foreground">
+              Highlights {pdfHighlightCount > 0 ? `(${pdfHighlightCount})` : ''}
+            </div>
+            <button
+              onClick={() => setDrawerOpen(false)}
+              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Close highlights drawer"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto">
+            {pdfHighlightsSorted.length === 0 ? (
+              <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+                Select text in the PDF to highlight or add a comment.
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {pdfHighlightsSorted.map((h) => (
+                  <li key={h.id}>
+                    <button
+                      onClick={() => jumpToHighlight(h)}
+                      className="block w-full px-3 py-2 text-left transition-colors hover:bg-accent/50"
+                    >
+                      <div className="line-clamp-3 text-xs text-foreground">
+                        &ldquo;{h.pdfAnchor.textContent}&rdquo;
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>Page {h.pdfAnchor.page}</span>
+                        {h.comment && <span className="truncate">· {h.comment}</span>}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </aside>
+      )}
       </div>
 
       <style jsx global>{`
@@ -609,7 +1119,88 @@ export default function PdfViewer({ fileUrl, title, className, initialPage, hide
         .search-mark-active {
           background: rgba(255, 150, 0, 0.7);
         }
+        .pdf-hl-rect {
+          position: absolute;
+          background: rgba(255, 224, 84, 0.42);
+          mix-blend-mode: multiply;
+          border-radius: 2px;
+          pointer-events: auto;
+          cursor: pointer;
+          z-index: 5;
+        }
+        .pdf-hl-rect:hover {
+          background: rgba(255, 213, 43, 0.6);
+        }
+        .pdf-hl-note-badge {
+          position: absolute;
+          z-index: 6;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: rgb(234, 179, 8);
+          color: white;
+          font-size: 10px;
+          font-weight: 600;
+          line-height: 1;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+          pointer-events: auto;
+          cursor: pointer;
+        }
+        .pdf-hl-note-badge:hover {
+          background: rgb(202, 138, 4);
+        }
       `}</style>
     </div>
+  )
+}
+
+interface PdfHighlightLayerProps {
+  scale: number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  proxy: any | undefined
+  highlights: Highlight[]
+  onHighlightClick: (h: Highlight) => void
+}
+
+function PdfHighlightLayer({ scale, proxy, highlights, onHighlightClick }: PdfHighlightLayerProps) {
+  if (!proxy || highlights.length === 0) return null
+  const viewport = proxy.getViewport({ scale })
+
+  return (
+    <>
+      {highlights.map((h) => {
+        if (!h.pdfAnchor) return null
+        const rects = pdfRectsToViewport(h.pdfAnchor.rects, viewport)
+        const lastRect = rects[rects.length - 1]
+        return (
+          <React.Fragment key={h.id}>
+            {rects.map((r, idx) => (
+              <div
+                key={`${h.id}-${idx}`}
+                className="pdf-hl-rect"
+                title={h.comment ?? undefined}
+                style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onHighlightClick(h) }}
+              />
+            ))}
+            {h.comment && lastRect && (
+              <div
+                className="pdf-hl-note-badge"
+                title={h.comment}
+                style={{ left: lastRect.left + lastRect.width - 4, top: lastRect.top - 6 }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onHighlightClick(h) }}
+              >
+                ●
+              </div>
+            )}
+          </React.Fragment>
+        )
+      })}
+    </>
   )
 }

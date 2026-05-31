@@ -51,3 +51,6 @@ nvidia-10k-first20.md
 
 # Supabase CLI cache
 supabase/.temp/
+
+# Local-only specs / scratch docs
+docs/

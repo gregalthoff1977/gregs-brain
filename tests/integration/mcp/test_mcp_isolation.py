@@ -26,6 +26,9 @@ DOC_B_ID = "bbbb1111-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 DOC_A2_ID = "aaaa4444-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 DOC_B2_ID = "bbbb4444-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
+ASSET_A_ID = "aaaa5555-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+ASSET_B_ID = "bbbb5555-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 REF_A_ID = "aaaa3333-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 REF_B_ID = "bbbb3333-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
@@ -103,6 +106,20 @@ async def seed_and_bind_pool(pg_pool):
         "file_type, status, content, version) "
         "VALUES ($1, $2, $3, 'source.pdf', 'Source', '/', 'pdf', 'ready', NULL, 1)",
         DOC_B2_ID, KB_B_ID, USER_B_ID,
+    )
+    await pg_pool.execute(
+        "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, "
+        "file_type, status, content, version, metadata) "
+        "VALUES ($1, $2, $3, 'image-01.png', 'image-01.png', '/webclipper/clip.assets/', "
+        "'png', 'ready', NULL, 1, '{\"asset\": true}'::jsonb)",
+        ASSET_A_ID, KB_A_ID, USER_A_ID,
+    )
+    await pg_pool.execute(
+        "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, "
+        "file_type, status, content, version, metadata) "
+        "VALUES ($1, $2, $3, 'image-01.png', 'image-01.png', '/webclipper/clip.assets/', "
+        "'png', 'ready', NULL, 1, '{\"asset\": true}'::jsonb)",
+        ASSET_B_ID, KB_B_ID, USER_B_ID,
     )
     await pg_pool.execute(
         "INSERT INTO document_references (id, source_document_id, target_document_id, "
@@ -192,6 +209,34 @@ class TestReadIsolation:
     async def test_find_document_by_name_other_tenant_returns_none(self, fs_alice):
         doc = await fs_alice.find_document_by_name(str(KB_B_ID), "notes.md")
         assert doc is None
+
+    async def test_load_asset_bytes_other_tenant_returns_none(self, fs_alice, monkeypatch):
+        calls: list[str] = []
+
+        async def fake_load_s3(self, key):
+            calls.append(key)
+            return b"asset-bytes"
+
+        monkeypatch.setattr(PostgresVaultFS, "_load_s3", fake_load_s3)
+
+        data = await fs_alice.load_asset_bytes(str(ASSET_B_ID))
+
+        assert data is None
+        assert calls == []
+
+    async def test_load_asset_bytes_own_tenant_uses_own_s3_prefix(self, fs_alice, monkeypatch):
+        calls: list[str] = []
+
+        async def fake_load_s3(self, key):
+            calls.append(key)
+            return b"asset-bytes"
+
+        monkeypatch.setattr(PostgresVaultFS, "_load_s3", fake_load_s3)
+
+        data = await fs_alice.load_asset_bytes(str(ASSET_A_ID))
+
+        assert data == b"asset-bytes"
+        assert calls == [f"{USER_A_ID}/{ASSET_A_ID}/source.png"]
 
 
 class TestWriteIsolation:

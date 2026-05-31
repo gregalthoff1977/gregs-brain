@@ -6,6 +6,13 @@ import {
   type DocumentByUrl,
   type Highlight,
 } from "@/lib/api";
+import {
+  getSelectedFolderPath,
+  getSelectedKnowledgeBaseId,
+  normalizeFolderPath,
+  setSelectedFolderPath,
+  setSelectedKnowledgeBaseId,
+} from "@/lib/settings";
 import KBPicker from "./KBPicker";
 import StatusFeedback, { type Status } from "./StatusFeedback";
 
@@ -34,6 +41,24 @@ function canonicalize(href: string): string {
   }
 }
 
+function safeHost(href: string): string {
+  try {
+    return new URL(href).hostname.replace(/^www\./, "");
+  } catch {
+    return href;
+  }
+}
+
+function slugifyFilename(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\w\s.-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 80)
+    .replace(/^[-_.]+|[-_.]+$/g, "") || "web-clip";
+}
+
 interface Props {
   apiUrl: string;
   accessToken: string | null;
@@ -50,12 +75,24 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
   const [tab, setTab] = useState<TabInfo | null>(null);
   const [title, setTitle] = useState("");
   const [knowledgeBaseId, setKnowledgeBaseId] = useState<string | null>(null);
+  const [folderPath, setFolderPath] = useState("/webclipper/");
+  const [showMore, setShowMore] = useState(false);
   const [existingDoc, setExistingDoc] = useState<DocumentByUrl | null>(null);
   const [checkingExisting, setCheckingExisting] = useState(false);
   const [status, setStatus] = useState<Status>({ type: "idle" });
 
   useEffect(() => {
     detectCurrentPage();
+    getSelectedKnowledgeBaseId()
+      .then((id) => {
+        if (id) setKnowledgeBaseId((current) => current ?? id);
+      })
+      .catch(() => {
+        // Non-fatal: the picker will fall back to the first KB.
+      });
+    getSelectedFolderPath()
+      .then((path) => setFolderPath(path))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -77,6 +114,9 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
         if (doc) {
           setExistingDoc(doc);
           setKnowledgeBaseId(doc.knowledge_base_id);
+          setFolderPath(doc.path || "/webclipper/");
+          setSelectedKnowledgeBaseId(doc.knowledge_base_id).catch(() => {});
+          if (doc.path) setSelectedFolderPath(doc.path).catch(() => {});
           chrome.tabs.sendMessage(tab.tabId, {
             type: "DOCUMENT_SAVED",
             documentId: doc.id,
@@ -138,7 +178,11 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
       // floating in the saved HTML.
       const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId: tab.tabId },
-        func: () => {
+        func: async () => {
+          const MAX_IMAGES = 12;
+          const MAX_IMAGE_BYTES = 2_500_000;
+          const MAX_TOTAL_BYTES = 6_000_000;
+
           const clone = document.documentElement.cloneNode(true) as HTMLElement;
           clone.querySelectorAll(
             ".llmwiki-pill, .llmwiki-popover, #llmwiki-highlight-style",
@@ -149,7 +193,80 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
             while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
             parent.removeChild(mark);
           });
+
+          const liveImages = Array.from(document.images);
+          const cloneImages = Array.from(clone.querySelectorAll("img"));
+          const candidates = liveImages
+            .map((img, index) => {
+              const rect = img.getBoundingClientRect();
+              const width = Math.round(rect.width || img.naturalWidth || 0);
+              const height = Math.round(rect.height || img.naturalHeight || 0);
+              const src = img.currentSrc || img.src || largestSrcsetUrl(img.srcset) || "";
+              const inArticle = !!img.closest("article, main, [role='main']");
+              return {
+                index,
+                src,
+                width,
+                height,
+                score: (inArticle ? 10_000_000 : 0) + width * height,
+              };
+            })
+            .filter((item) => {
+              if (!item.src || item.src.startsWith("data:") || item.src.startsWith("blob:")) return false;
+              if (!/^https?:\/\//i.test(item.src)) return false;
+              return item.width >= 80 && item.height >= 50;
+            })
+            .sort((a, b) => b.score - a.score)
+            .slice(0, MAX_IMAGES);
+
+          let totalBytes = 0;
+          for (const item of candidates) {
+            if (totalBytes >= MAX_TOTAL_BYTES) break;
+            const remaining = MAX_TOTAL_BYTES - totalBytes;
+            const maxBytes = Math.min(MAX_IMAGE_BYTES, remaining);
+            try {
+              const response = await chrome.runtime.sendMessage({
+                type: "FETCH_IMAGE_DATA_URL",
+                url: item.src,
+                maxBytes,
+              });
+              if (!response?.dataUrl || response?.error) continue;
+              totalBytes += response.size ?? 0;
+              const cloneImg = cloneImages[item.index];
+              if (!cloneImg) continue;
+              cloneImg.setAttribute("src", response.dataUrl);
+              cloneImg.removeAttribute("srcset");
+              cloneImg.removeAttribute("sizes");
+              if (item.width) cloneImg.setAttribute("width", String(item.width));
+              if (item.height) cloneImg.setAttribute("height", String(item.height));
+              cloneImg.setAttribute("data-llmwiki-inlined-image", "true");
+            } catch {
+              // Leave the original URL in place so the API can still try server-side.
+            }
+          }
+
           return clone.outerHTML;
+
+          function largestSrcsetUrl(srcset: string): string {
+            let bestUrl = "";
+            let bestWidth = 0;
+            for (const raw of srcset.split(",")) {
+              const parts = raw.trim().split(/\s+/);
+              if (!parts[0]) continue;
+              const width = parts[1]?.endsWith("w")
+                ? Number.parseInt(parts[1], 10)
+                : 0;
+              if (!bestUrl || width > bestWidth) {
+                bestUrl = parts[0];
+                bestWidth = width;
+              }
+            }
+            try {
+              return bestUrl ? new URL(bestUrl, location.href).toString() : "";
+            } catch {
+              return bestUrl;
+            }
+          }
         },
       });
       html = result as string;
@@ -172,10 +289,12 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
     setStatus({ type: "saving", message: "Saving to LLM Wiki..." });
 
     const canonicalUrl = canonicalize(tab.url);
+    const normalizedFolderPath = normalizeFolderPath(folderPath);
 
     const result = await saveWebPage(apiUrl, accessToken, knowledgeBaseId, {
       url: canonicalUrl,
       title: title || tab.title,
+      path: normalizedFolderPath,
       html,
       highlights: highlights.length ? highlights : undefined,
     });
@@ -195,11 +314,13 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
       id: result.id,
       knowledge_base_id: knowledgeBaseId,
       title: title || tab.title,
-      path: "/webclipper/",
+      path: normalizedFolderPath,
       filename: "",
       version: 1,
       highlights,
     });
+    setSelectedKnowledgeBaseId(knowledgeBaseId).catch(() => {});
+    setSelectedFolderPath(normalizedFolderPath).catch(() => {});
     setStatus({ type: "success" });
   }
 
@@ -220,9 +341,17 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
     setStatus({ type: "saving", message: "Uploading to LLM Wiki..." });
 
     const pdfBytes = new Uint8Array(downloadResult.blob);
-    await savePdf(apiUrl, accessToken, pdfBytes, downloadResult.filename, knowledgeBaseId);
+    const normalizedFolderPath = normalizeFolderPath(folderPath);
+    await savePdf(apiUrl, accessToken, pdfBytes, downloadResult.filename, knowledgeBaseId, normalizedFolderPath);
 
+    setSelectedKnowledgeBaseId(knowledgeBaseId).catch(() => {});
+    setSelectedFolderPath(normalizedFolderPath).catch(() => {});
     setStatus({ type: "success" });
+  }
+
+  function handleKnowledgeBaseChange(id: string) {
+    setKnowledgeBaseId(id);
+    setSelectedKnowledgeBaseId(id).catch(() => {});
   }
 
   if (!tab) {
@@ -239,18 +368,6 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
 
   return (
     <div className="space-y-3">
-      {/* Type badge + URL */}
-      <div className="flex min-w-0 items-center gap-2 rounded-md border border-zinc-200 bg-white px-2.5 py-2">
-        <span
-          className={`inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[11px] font-medium ${
-            tab.isPdf ? "bg-red-50 text-red-700" : "bg-zinc-100 text-zinc-700"
-          }`}
-        >
-          {tab.isPdf ? "PDF" : "Web"}
-        </span>
-        <span className="min-w-0 truncate text-xs text-zinc-500">{tab.url}</span>
-      </div>
-
       {/* Title */}
       <div>
         <label className="mb-1.5 block text-xs font-medium text-zinc-700">Title</label>
@@ -270,29 +387,66 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
         apiUrl={apiUrl}
         accessToken={accessToken}
         value={knowledgeBaseId}
-        onChange={setKnowledgeBaseId}
+        onChange={handleKnowledgeBaseChange}
       />
 
-      {/* Save button */}
-      <button
-        onClick={handleSave}
-        disabled={!canSave}
-        className={`h-9 w-full rounded-md px-4 text-sm font-medium
-                   transition-colors focus-visible:outline-none focus-visible:ring-2
-                   focus-visible:ring-zinc-950 focus-visible:ring-offset-2
-                   disabled:cursor-not-allowed ${
-                     isAlreadySaved
-                       ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                       : "bg-zinc-950 text-zinc-50 shadow-sm hover:bg-zinc-800 disabled:opacity-50"
-                   }`}
-      >
-        {isSaving ? "Saving..." : isAlreadySaved ? "Already saved" : "Save to LLM Wiki"}
-      </button>
+      {/* Folder/More section disabled for v0 — re-enable when folder picker is ready.
+      <div className="rounded-md border border-zinc-200 bg-zinc-50/60">
+        <button
+          type="button"
+          onClick={() => setShowMore((v) => !v)}
+          className="flex h-8 w-full items-center justify-between px-3 text-xs font-medium text-zinc-600 transition-colors hover:text-zinc-950"
+        >
+          <span>More</span>
+          <span className="text-zinc-400">{showMore ? "-" : "+"}</span>
+        </button>
+        {showMore && (
+          <div className="space-y-2 border-t border-zinc-200 px-3 py-3">
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-zinc-700">Folder</label>
+              <input
+                list="llmwiki-folder-suggestions"
+                value={folderPath}
+                onChange={(e) => setFolderPath(e.target.value)}
+                onBlur={() => setFolderPath(normalizeFolderPath(folderPath))}
+                className="h-8 w-full rounded-md border border-zinc-200 bg-white px-2.5 text-xs text-zinc-950 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-950/10"
+                placeholder="/webclipper/"
+              />
+              <datalist id="llmwiki-folder-suggestions">
+                <option value="/webclipper/" />
+                <option value="/articles/" />
+                <option value="/research/" />
+                <option value="/inbox/" />
+              </datalist>
+            </div>
+            <div className="min-w-0 text-[11px] text-zinc-500">
+              <span className="font-medium text-zinc-600">Filename</span>{" "}
+              <span className="break-all">{normalizedFolderPath}{filenamePreview}</span>
+            </div>
+          </div>
+        )}
+      </div>
+      */}
+
+      {/* Save button — hidden when the page is already saved */}
+      {!isAlreadySaved && (
+        <button
+          onClick={handleSave}
+          disabled={!canSave}
+          className="h-9 w-full rounded-md bg-zinc-950 px-4 text-sm font-medium text-zinc-50
+                     shadow-sm transition-colors hover:bg-zinc-800
+                     focus-visible:outline-none focus-visible:ring-2
+                     focus-visible:ring-zinc-950 focus-visible:ring-offset-2
+                     disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isSaving ? "Saving..." : "Save to LLM Wiki"}
+        </button>
+      )}
 
       {checkingExisting && (
         <p className="text-xs text-zinc-500">Checking saved status...</p>
       )}
-      {isAlreadySaved && (
+      {isAlreadySaved && status.type !== "success" && (
         <p className="text-xs text-emerald-700">
           This page is already in LLM Wiki.
         </p>

@@ -15,15 +15,17 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "4.1.18",
     "@types/chrome": "0.0.287",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@wxt-dev/module-react": "1.1.5",
     "autoprefixer": "10.4.24",
+    "happy-dom": "20.9.0",
     "postcss": "8.5.10",
     "tailwindcss": "4.1.18",
-    "@tailwindcss/postcss": "4.1.18",
     "typescript": "5.9.3",
+    "vitest": "4.1.7",
     "wxt": "0.19.29"
   },
   "overrides": {

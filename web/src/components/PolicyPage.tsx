@@ -68,6 +68,7 @@ export function PolicyPage({ content }: { content: string }) {
         <div className="flex items-center gap-4">
           <Link href="/terms" className="hover:text-muted-foreground transition-colors">Terms</Link>
           <Link href="/privacy" className="hover:text-muted-foreground transition-colors">Privacy</Link>
+          <Link href="/dmca" className="hover:text-muted-foreground transition-colors">DMCA</Link>
         </div>
       </footer>
     </div>

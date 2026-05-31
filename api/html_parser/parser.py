@@ -394,16 +394,78 @@ class Parser:
     def _process_img(self, el: Tag) -> str:
         alt = el.get("alt", "")
         src = el.get("src", "")
+        candidates = self._parse_srcset(el.get("srcset"))
 
-        if not src:
+        if not src and not candidates:
             return ""
 
-        abs_url = self._resolve_url(src)
+        abs_url = self._resolve_url(src) if src else candidates[0][0]
+        candidate_urls = self._candidate_image_urls(abs_url, candidates)
+        inferred_width, inferred_height = self._infer_dimensions_from_url(candidate_urls[0])
         ref = f"IMG{len(self.images) + 1}"
-        img = Image(url=abs_url, alt=alt, ref=ref)
+        img = Image(
+            url=abs_url,
+            alt=alt,
+            ref=ref,
+            width=self._parse_dimension(el.get("width")) or inferred_width,
+            height=self._parse_dimension(el.get("height")) or inferred_height,
+            candidate_urls=candidate_urls,
+        )
         self.images.append(img)
 
         return f"![{self._escape_md_link_text(alt)}](llmwiki-image://{ref})"
+
+    def _parse_srcset(self, value: object) -> list[tuple[str, int | None]]:
+        if not value:
+            return []
+        candidates: list[tuple[str, int | None]] = []
+        for raw in str(value).split(","):
+            parts = raw.strip().split()
+            if not parts:
+                continue
+            url = self._resolve_url(parts[0])
+            width: int | None = None
+            if len(parts) > 1 and parts[1].endswith("w"):
+                width = self._parse_dimension(parts[1][:-1])
+            candidates.append((url, width))
+        return candidates
+
+    @staticmethod
+    def _candidate_image_urls(src: str, srcset: list[tuple[str, int | None]]) -> list[str]:
+        ordered_srcset = [
+            url for url, _width in sorted(
+                srcset,
+                key=lambda item: item[1] or 0,
+                reverse=True,
+            )
+        ]
+        urls: list[str] = []
+        # Bloomberg and other publishers sometimes put a tiny/sentinel URL in
+        # src and the real images in srcset. Try srcset first when present,
+        # then fall back to src for pages that only expose src.
+        for url in [*ordered_srcset, src]:
+            if url and url not in urls:
+                urls.append(url)
+        return urls
+
+    @staticmethod
+    def _infer_dimensions_from_url(url: str) -> tuple[int | None, int | None]:
+        match = re.search(r"/(\d{2,5})x(\d{2,5})(?:[./?_-]|$)", url)
+        if not match:
+            return None, None
+        width = int(match.group(1))
+        height = int(match.group(2))
+        return (width or None), (height or None)
+
+    @staticmethod
+    def _parse_dimension(value: object) -> int | None:
+        if value is None:
+            return None
+        match = re.match(r"^\s*(\d{1,5})", str(value))
+        if not match:
+            return None
+        parsed = int(match.group(1))
+        return parsed if parsed > 0 else None
 
     @staticmethod
     def _escape_md_link_text(value: str) -> str:

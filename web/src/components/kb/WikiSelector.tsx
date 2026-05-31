@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronsUpDown, Plus, Pencil, Trash2 } from 'lucide-react'
+import { ChevronsUpDown, Plus, Pencil, Trash2, Library } from 'lucide-react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { Command, CommandInput, CommandList, CommandItem, CommandEmpty, CommandGroup, CommandSeparator } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -105,6 +105,15 @@ export function WikiSelector({ kbName, kbId }: { kbName: string; kbId: string })
                 <>
                   <CommandSeparator />
                   <CommandGroup heading="Actions">
+                    <CommandItem
+                      onSelect={() => {
+                        setOpen(false)
+                        router.push('/wikis')
+                      }}
+                    >
+                      <Library className="size-3.5 mr-2" />
+                      View all wikis
+                    </CommandItem>
                     <CommandItem
                       onSelect={() => {
                         setOpen(false)

@@ -11,7 +11,10 @@ from services.base import PublicWikiService
 router = APIRouter(prefix="/v1/public", tags=["public"])
 
 _NO_CACHE_VALUE = "no-store, must-revalidate"
-_NO_CACHE_HEADERS = {"Cache-Control": _NO_CACHE_VALUE}
+_NO_CACHE_HEADERS = {
+    "Cache-Control": _NO_CACHE_VALUE,
+    "X-Content-Type-Options": "nosniff",
+}
 _SLUG_MAX = 80
 
 
@@ -73,7 +76,7 @@ async def get_public_wiki_asset(
     async def _gen():
         yield body
 
-    return StreamingResponse(_gen(), media_type=media_type, headers=_NO_CACHE_HEADERS)
+    return StreamingResponse(_gen(), media_type=media_type, headers=_headers_for_key(key))
 
 
 def _media_type_for_key(key: str) -> str:
@@ -93,3 +96,12 @@ def _media_type_for_key(key: str) -> str:
         "csv": "text/csv; charset=utf-8",
         "json": "application/json",
     }.get(ext, "application/octet-stream")
+
+
+def _headers_for_key(key: str) -> dict[str, str]:
+    headers = dict(_NO_CACHE_HEADERS)
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+    if ext in {"html", "htm", "svg"}:
+        filename = key.rsplit("/", 1)[-1] or "asset"
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return headers

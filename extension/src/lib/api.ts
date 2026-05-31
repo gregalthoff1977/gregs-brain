@@ -141,11 +141,11 @@ export async function fetchKnowledgeBases(
   apiUrl: string,
   accessToken: string | null,
 ): Promise<KnowledgeBase[]> {
-  const res = await fetch(`${apiUrl}/v1/knowledge-bases`, {
+  const res = await smartFetch(`${apiUrl}/v1/knowledge-bases`, {
     headers: authHeaders(accessToken),
   });
   if (!res.ok) throw new Error(`Failed to fetch knowledge bases: ${res.status}`);
-  return res.json();
+  return res.data as KnowledgeBase[];
 }
 
 export async function createKnowledgeBase(
@@ -166,9 +166,9 @@ export async function saveWebPage(
   apiUrl: string,
   accessToken: string | null,
   knowledgeBaseId: string,
-  payload: { url: string; title: string; html: string; highlights?: Highlight[] },
+  payload: { url: string; title: string; html: string; path?: string; highlights?: Highlight[] },
 ): Promise<SaveResult> {
-  const res = await fetch(
+  const res = await smartFetch(
     `${apiUrl}/v1/knowledge-bases/${knowledgeBaseId}/documents/web`,
     {
       method: "POST",
@@ -177,10 +177,9 @@ export async function saveWebPage(
     },
   );
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Save failed (${res.status}): ${text}`);
+    throw new Error(`Save failed (${res.status}): ${res.text}`);
   }
-  return res.json();
+  return res.data as SaveResult;
 }
 
 export async function getDocumentByUrl(
@@ -290,6 +289,7 @@ export async function savePdf(
   pdfBytes: Uint8Array,
   filename: string,
   knowledgeBaseId: string,
+  path = "/webclipper/",
 ): Promise<SaveResult> {
   // Copy bytes into a fresh ArrayBuffer so the resulting Blob/body matches
   // the BodyInit / BlobPart types regardless of the source buffer's TypedArray
@@ -301,7 +301,7 @@ export async function savePdf(
   if (!accessToken) {
     const form = new FormData();
     form.append("file", new Blob([pdfBuffer], { type: "application/pdf" }), filename);
-    form.append("path", "/webclipper/");
+    form.append("path", path);
     const res = await fetch(`${apiUrl}/v1/upload`, {
       method: "POST",
       body: form,
@@ -315,7 +315,7 @@ export async function savePdf(
   const metadata = [
     `filename ${btoa(filename)}`,
     `knowledge_base_id ${btoa(knowledgeBaseId)}`,
-    `path ${btoa("/webclipper/")}`,
+    `path ${btoa(path)}`,
   ].join(",");
 
   const createRes = await fetch(`${apiUrl}/v1/uploads`, {

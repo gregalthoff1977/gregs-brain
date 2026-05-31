@@ -365,6 +365,7 @@ export default function LandingPage() {
         <div className="flex items-center gap-4">
           <Link href="/terms" className="hover:text-muted-foreground transition-colors">Terms</Link>
           <Link href="/privacy" className="hover:text-muted-foreground transition-colors">Privacy</Link>
+          <Link href="/dmca" className="hover:text-muted-foreground transition-colors">DMCA</Link>
           <span>Free &amp; open source &middot; Apache 2.0</span>
         </div>
       </footer>
