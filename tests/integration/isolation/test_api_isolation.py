@@ -222,7 +222,8 @@ class TestWriteIsolation:
 
 class TestHighlightIsolation:
     """Granular highlight + move isolation. New endpoints added in V2:
-    POST /v1/documents/{id}/highlights, DELETE /v1/documents/{id}/highlights/{hid},
+    POST/PATCH /v1/documents/{id}/highlights,
+    DELETE /v1/documents/{id}/highlights/{hid},
     PATCH /v1/documents/{id} body knowledge_base_id."""
 
     async def _seed_highlight(self, pool, doc_id, hid="seed-1"):
@@ -270,6 +271,30 @@ class TestHighlightIsolation:
             headers=auth_headers(USER_A_ID),
         )
         assert resp.status_code == 404
+
+    async def test_replace_highlights_cross_tenant_returns_404(self, client):
+        resp = await client.patch(
+            f"/v1/documents/{DOC_B_ID}/highlights",
+            headers=auth_headers(USER_A_ID),
+            json={"highlights": [self._new_highlight()]},
+        )
+        assert resp.status_code == 404
+
+    async def test_replace_highlights_cross_tenant_does_not_modify(self, client, pool):
+        await self._seed_highlight(pool, DOC_B_ID, hid="bob-keep")
+        await client.patch(
+            f"/v1/documents/{DOC_B_ID}/highlights",
+            headers=auth_headers(USER_A_ID),
+            json={"highlights": [self._new_highlight()]},
+        )
+        row = await pool.fetchrow(
+            "SELECT highlights FROM documents WHERE id = $1", DOC_B_ID,
+        )
+        import json
+        highlights = row["highlights"]
+        if isinstance(highlights, str):
+            highlights = json.loads(highlights)
+        assert [h.get("id") for h in highlights] == ["bob-keep"]
 
     async def test_upsert_highlight_cross_tenant_returns_404(self, client):
         resp = await client.post(

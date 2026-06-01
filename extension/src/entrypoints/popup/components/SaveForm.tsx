@@ -15,6 +15,7 @@ import {
 } from "@/lib/settings";
 import KBPicker from "./KBPicker";
 import StatusFeedback, { type Status } from "./StatusFeedback";
+import { recordSave } from "@/lib/streak";
 
 const TRACKING_PARAMS = new Set([
   "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -321,7 +322,8 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
     });
     setSelectedKnowledgeBaseId(knowledgeBaseId).catch(() => {});
     setSelectedFolderPath(normalizedFolderPath).catch(() => {});
-    setStatus({ type: "success" });
+    const stats = await recordSave().catch(() => null);
+    setStatus({ type: "success", stats: stats ?? undefined });
   }
 
   async function handleSavePdf() {
@@ -346,7 +348,8 @@ export default function SaveForm({ apiUrl, accessToken }: Props) {
 
     setSelectedKnowledgeBaseId(knowledgeBaseId).catch(() => {});
     setSelectedFolderPath(normalizedFolderPath).catch(() => {});
-    setStatus({ type: "success" });
+    const stats = await recordSave().catch(() => null);
+    setStatus({ type: "success", stats: stats ?? undefined });
   }
 
   function handleKnowledgeBaseChange(id: string) {

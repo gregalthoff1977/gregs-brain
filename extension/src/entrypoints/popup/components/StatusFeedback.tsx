@@ -1,9 +1,14 @@
 import React from "react";
 
+export interface SaveStats {
+  totalSources: number;
+  streakDays: number;
+}
+
 export type Status =
   | { type: "idle" }
   | { type: "saving"; message: string }
-  | { type: "success" }
+  | { type: "success"; stats?: SaveStats }
   | { type: "error"; message: string };
 
 interface Props {
@@ -29,10 +34,31 @@ export default function StatusFeedback({ status }: Props) {
       )}
       {status.type === "success" && (
         <div className="flex items-center gap-2">
-          <svg className="h-3.5 w-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="h-3.5 w-3.5 text-emerald-600 animate-save-check"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
-          Saved to LLM Wiki
+          <span>
+            Saved
+            {status.stats && (
+              <>
+                {" · "}
+                <span className="font-medium text-emerald-800">
+                  wiki: {status.stats.totalSources}
+                </span>
+                {status.stats.streakDays > 0 && (
+                  <>
+                    {" · "}
+                    <span aria-hidden>🔥</span> {status.stats.streakDays}d
+                  </>
+                )}
+              </>
+            )}
+          </span>
         </div>
       )}
       {status.type === "error" && (

@@ -307,7 +307,7 @@ export function GraphViewer({ kbId, focusNodeId, onNavigateToDoc }: Props) {
           disabled={rebuilding}
           className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-1.5 text-xs font-medium hover:bg-accent transition-colors cursor-pointer disabled:opacity-50"
         >
-          <RefreshCw className={`size-3 ${rebuilding ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`size-3.5 ${rebuilding ? 'animate-spin' : ''}`} strokeWidth={2.25} />
           {rebuilding ? 'Building...' : 'Build references'}
         </button>
         <p className="text-[11px] text-muted-foreground/50 text-center max-w-xs">

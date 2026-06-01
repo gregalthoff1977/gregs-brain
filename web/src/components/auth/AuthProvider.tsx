@@ -27,6 +27,11 @@ export function AuthProvider({ userId, email, children }: AuthProviderProps) {
   const signOut = useUserStore((s) => s.signOut)
   const onboarded = useUserStore((s) => s.onboarded)
   const fetchKBs = useKBStore((s) => s.fetchKBs)
+  const pathnameRef = React.useRef(pathname)
+
+  React.useEffect(() => {
+    pathnameRef.current = pathname
+  }, [pathname])
 
   React.useEffect(() => {
     if (isLocal) {
@@ -80,7 +85,7 @@ export function AuthProvider({ userId, email, children }: AuthProviderProps) {
             const me = await apiFetch<{ onboarded: boolean }>('/v1/me', session.access_token)
             if (cancelled) return
             setOnboarded(me.onboarded)
-            if (!me.onboarded && pathname !== '/onboarding') {
+            if (!me.onboarded && pathnameRef.current !== '/onboarding') {
               router.replace('/onboarding')
             }
           } catch {
@@ -109,7 +114,7 @@ export function AuthProvider({ userId, email, children }: AuthProviderProps) {
       cancelled = true
       subscription?.unsubscribe()
     }
-  }, [userId, email, setUser, setAccessToken, setOnboarded, fetchKBs, router, pathname, signOut])
+  }, [userId, email, setUser, setAccessToken, setOnboarded, fetchKBs, router, signOut])
 
   React.useEffect(() => {
     if (!isLocal && onboarded === false && pathname !== '/onboarding') {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { AppShell } from '@/components/layout/AppShell'
 import { AuthProvider } from '@/components/auth/AuthProvider'
@@ -25,16 +25,22 @@ function HostedDashboard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [user, setUser] = useState<{ id: string; email: string } | null>(null)
   const [loading, setLoading] = useState(true)
+  const pathnameRef = useRef(pathname)
+
+  useEffect(() => {
+    pathnameRef.current = pathname
+  }, [pathname])
 
   useEffect(() => {
     let cancelled = false
-    const returnTo = pathname !== '/wikis' ? `?returnTo=${encodeURIComponent(pathname)}` : ''
 
     const bounceToLogin = async () => {
       try {
         const { createClient } = await import('@/lib/supabase/client')
         await createClient().auth.signOut()
       } catch { /* signOut best-effort */ }
+      const currentPath = pathnameRef.current
+      const returnTo = currentPath !== '/wikis' ? `?returnTo=${encodeURIComponent(currentPath)}` : ''
       if (!cancelled) router.replace(`/login${returnTo}`)
     }
 
@@ -58,7 +64,7 @@ function HostedDashboard({ children }: { children: React.ReactNode }) {
     })
 
     return () => { cancelled = true }
-  }, [router, pathname])
+  }, [router])
 
   if (loading) return null
 

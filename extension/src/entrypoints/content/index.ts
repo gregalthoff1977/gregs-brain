@@ -458,18 +458,28 @@ class HighlightController {
     // pass can attempt text-scan resolution into a single text node.
     this.highlights.push(highlight);
     window.getSelection()?.removeAllRanges();
-    this.persistHighlight(highlight, "Highlight saved");
     if (withNote && wrapped) {
       const mark = findMark(highlight.id);
-      if (mark) this.openPopoverForExisting(highlight.id, mark);
+      if (mark) this.openPopoverForExisting(highlight.id, mark, { discardOnCancel: true });
     } else if (withNote) {
       // No wrap means no anchor element to point a popover at — open at the
       // last range bounding rect via a transient anchor element.
-      this.openPopoverAtRect(highlight.id, range.getBoundingClientRect());
+      this.openPopoverAtRect(highlight.id, range.getBoundingClientRect(), { discardOnCancel: true });
+    } else {
+      this.persistHighlight(highlight, "Highlight saved");
     }
   }
 
-  private openPopoverAtRect(id: string, rect: DOMRect) {
+  private discardLocalHighlight(id: string) {
+    unwrapById(id);
+    this.highlights = this.highlights.filter((h) => h.id !== id);
+  }
+
+  private openPopoverAtRect(
+    id: string,
+    rect: DOMRect,
+    options: { discardOnCancel?: boolean } = {},
+  ) {
     const highlight = this.highlights.find((h) => h.id === id);
     if (!highlight) return;
     this.removePopover();
@@ -486,7 +496,10 @@ class HighlightController {
     const cancel = document.createElement("button");
     cancel.className = "llmwiki-cancel";
     cancel.textContent = "Cancel";
-    cancel.onclick = () => this.removePopover();
+    cancel.onclick = () => {
+      if (options.discardOnCancel) this.discardLocalHighlight(id);
+      this.removePopover();
+    };
     const save = document.createElement("button");
     save.className = "llmwiki-save";
     save.textContent = "Save";
@@ -508,7 +521,11 @@ class HighlightController {
     setTimeout(() => textarea.focus(), 0);
   }
 
-  private openPopoverForExisting(id: string, mark: HTMLElement) {
+  private openPopoverForExisting(
+    id: string,
+    mark: HTMLElement,
+    options: { discardOnCancel?: boolean } = {},
+  ) {
     const highlight = this.highlights.find((h) => h.id === id);
     if (!highlight) return;
     this.removePopover();
@@ -526,7 +543,8 @@ class HighlightController {
     del.className = "llmwiki-delete";
     del.textContent = "Delete";
     del.onclick = () => {
-      this.deleteHighlight(id);
+      if (options.discardOnCancel) this.discardLocalHighlight(id);
+      else this.deleteHighlight(id);
       this.removePopover();
     };
     const actions = document.createElement("div");
@@ -534,7 +552,10 @@ class HighlightController {
     const cancel = document.createElement("button");
     cancel.className = "llmwiki-cancel";
     cancel.textContent = "Cancel";
-    cancel.onclick = () => this.removePopover();
+    cancel.onclick = () => {
+      if (options.discardOnCancel) this.discardLocalHighlight(id);
+      this.removePopover();
+    };
     const save = document.createElement("button");
     save.className = "llmwiki-save";
     save.textContent = "Save";

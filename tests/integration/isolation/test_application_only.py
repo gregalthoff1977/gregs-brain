@@ -247,6 +247,30 @@ class TestHighlightIsolationWithoutRLS:
         )
         assert resp.status_code == 404
 
+    async def test_replace_highlights_cross_tenant_returns_404(self, client_no_rls):
+        resp = await client_no_rls.patch(
+            f"/v1/documents/{DOC_B_ID}/highlights",
+            headers=auth_headers(USER_A_ID),
+            json={"highlights": [self._new_highlight()]},
+        )
+        assert resp.status_code == 404
+
+    async def test_replace_highlights_does_not_modify(self, client_no_rls, pool):
+        import json
+        await self._seed_highlight(pool, DOC_B_ID, "bob-keep")
+        await client_no_rls.patch(
+            f"/v1/documents/{DOC_B_ID}/highlights",
+            headers=auth_headers(USER_A_ID),
+            json={"highlights": [self._new_highlight()]},
+        )
+        row = await pool.fetchrow(
+            "SELECT highlights FROM documents WHERE id = $1", DOC_B_ID,
+        )
+        highlights = row["highlights"]
+        if isinstance(highlights, str):
+            highlights = json.loads(highlights)
+        assert [h.get("id") for h in highlights] == ["bob-keep"]
+
     async def test_upsert_highlight_cross_tenant_returns_404(self, client_no_rls):
         resp = await client_no_rls.post(
             f"/v1/documents/{DOC_B_ID}/highlights",

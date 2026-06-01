@@ -29,16 +29,17 @@ export const useKBStore = create<KBState>((set, get) => ({
   error: null,
 
   fetchKBs: async (options) => {
-    set({ loading: true, error: null })
+    const hadData = get().knowledgeBases.length > 0
+    set({ loading: !hadData, error: null })
     try {
       const token = getToken()
       const data = await apiFetch<KnowledgeBase[]>('/v1/knowledge-bases', token)
       set({ knowledgeBases: data, loading: false })
       return data
     } catch (err) {
-      set({ error: (err as Error).message, loading: false })
+      set({ error: hadData ? null : (err as Error).message, loading: false })
       if (options?.throwOnError) throw err
-      return []
+      return hadData ? get().knowledgeBases : []
     }
   },
 
