@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS workspace (
 
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    knowledge_base_id TEXT,
     user_id TEXT NOT NULL,
     filename TEXT NOT NULL,
     title TEXT,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS documents (
     last_indexed_at TEXT,
     stale_since TEXT,
     highlights TEXT DEFAULT '[]',
+    archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     UNIQUE(relative_path)
@@ -109,8 +111,5 @@ CREATE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
 CREATE INDEX IF NOT EXISTS idx_documents_source_kind ON documents(source_kind);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
--- Partial index for the "search but only chunks I've annotated" filter.
-CREATE INDEX IF NOT EXISTS idx_chunks_annotated
-  ON document_chunks(document_id) WHERE has_highlight = 1;
 CREATE INDEX IF NOT EXISTS idx_refs_source ON document_references(source_document_id);
 CREATE INDEX IF NOT EXISTS idx_refs_target ON document_references(target_document_id);

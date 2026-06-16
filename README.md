@@ -83,6 +83,24 @@ There are two ways to get material into your wiki.
 
 The extension works in both modes. By default it talks to the hosted app; flip the toggle to **Local** and it points at your running workspace at `http://localhost:8000` — so anything you clip while `./llmwiki open` is running goes straight into your local wiki. Pick a destination folder (default `/webclipper/`) and start saving.
 
+**Email forwarding.** In local mode, the API exposes `POST /ingest/email` so an inbound email provider can create inbox wiki pages from forwarded messages. Send JSON with `sender`, `subject`, `body_html`, `body_text`, and `received_at`; Gregs Brain converts the email body to Markdown, tags the page `email` and `inbox`, stores the original metadata in frontmatter, and creates `/wiki/inbox/YYYY-MM-DD-subject.md`.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8000/ingest/email \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sender": "newsletter@example.com",
+    "subject": "Interesting read",
+    "body_html": "<p>Email HTML</p>",
+    "body_text": "Email text fallback",
+    "received_at": "2026-06-16T20:30:00Z"
+  }'
+```
+
+To connect a forwarding provider in Codespaces, start Gregs Brain, make port `8000` public or private as needed from the Codespaces Ports panel, and point the provider webhook at `https://YOUR-CODESPACE-8000.app.github.dev/ingest/email`. Map the provider's From, Subject, HTML body, plain text body, and timestamp fields to the JSON fields above. Providers with inbound webhook support such as Forward Email, Mailgun Routes, Postmark Inbound, SendGrid Inbound Parse, Zapier, or Make can all fit this shape. Keep the Codespace running while receiving forwarded email; this path is local-only and does not require Railway or OpenRouter.
+
 # Supported files
 
 | Type | Formats | How it's handled |

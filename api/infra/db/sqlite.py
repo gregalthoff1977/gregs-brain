@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 _SCHEMA_PATH = Path(__file__).parent.parent.parent.parent / "shared" / "sqlite_schema.sql"
 
 _DOC_COLUMNS = (
-    "id, user_id, filename, title, path, relative_path, source_kind, "
+    "id, knowledge_base_id, user_id, filename, title, path, relative_path, source_kind, "
     "file_type, file_size, document_number, status, page_count, content, "
     "tags, date, metadata, error_message, version, parser, "
     "content_hash, mtime_ns, last_indexed_at, stale_since, "
-    "created_at, updated_at"
+    "highlights, archived, created_at, updated_at"
 )
 
 
@@ -95,8 +95,81 @@ async def create_pool(db_path: str, init_schema: bool = True) -> aiosqlite.Conne
     if init_schema:
         schema = _SCHEMA_PATH.read_text(encoding='utf-8')
         await db.executescript(schema)
+        await migrate_schema(db)
         await db.commit()
     return db
+
+
+async def _table_columns(db: aiosqlite.Connection, table: str) -> set[str]:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    return {row[1] for row in rows}
+
+
+async def migrate_schema(db: aiosqlite.Connection) -> None:
+    """Upgrade existing local SQLite indexes in place.
+
+    The local schema file is applied with CREATE TABLE IF NOT EXISTS, which is
+    enough for new workspaces but does not add columns to older .llmwiki DBs.
+    Keep these migrations additive so users never have to delete .llmwiki just
+    to pick up a local index shape change.
+    """
+    columns = await _table_columns(db, "documents")
+    document_columns = {
+        "knowledge_base_id": "TEXT",
+        "file_size": "INTEGER DEFAULT 0",
+        "document_number": "INTEGER",
+        "page_count": "INTEGER",
+        "date": "TEXT",
+        "metadata": "TEXT",
+        "error_message": "TEXT",
+        "parser": "TEXT",
+        "content_hash": "TEXT",
+        "mtime_ns": "INTEGER",
+        "last_indexed_at": "TEXT",
+        "stale_since": "TEXT",
+        "highlights": "TEXT DEFAULT '[]'",
+        "archived": "INTEGER NOT NULL DEFAULT 0",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for name, definition in document_columns.items():
+        if name not in columns:
+            await db.execute(f"ALTER TABLE documents ADD COLUMN {name} {definition}")
+
+    await db.execute(
+        "UPDATE documents "
+        "SET knowledge_base_id = (SELECT id FROM workspace LIMIT 1) "
+        "WHERE knowledge_base_id IS NULL"
+    )
+    await db.execute("UPDATE documents SET archived = 0 WHERE archived IS NULL")
+
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_documents_knowledge_base_id ON documents(knowledge_base_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_documents_kb_path ON documents(knowledge_base_id, path)")
+
+    chunk_columns = await _table_columns(db, "document_chunks")
+    if chunk_columns:
+        additive_chunk_columns = {
+            "source_content": "TEXT NOT NULL DEFAULT ''",
+            "annotations_text": "TEXT",
+            "has_highlight": "INTEGER NOT NULL DEFAULT 0",
+            "page": "INTEGER",
+            "start_char": "INTEGER",
+            "token_count": "INTEGER NOT NULL DEFAULT 0",
+            "header_breadcrumb": "TEXT",
+            "created_at": "TEXT",
+        }
+        for name, definition in additive_chunk_columns.items():
+            if name not in chunk_columns:
+                await db.execute(f"ALTER TABLE document_chunks ADD COLUMN {name} {definition}")
+        await db.execute(
+            "UPDATE document_chunks SET source_content = content "
+            "WHERE source_content IS NULL OR source_content = ''"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_annotated "
+            "ON document_chunks(document_id) WHERE has_highlight = 1"
+        )
 
 
 class SQLiteDocumentRepository:
@@ -107,14 +180,15 @@ class SQLiteDocumentRepository:
         if path:
             cursor = await self._db.execute(
                 f"SELECT {_DOC_COLUMNS} FROM documents "
-                "WHERE path = ? AND status != 'failed' "
+                "WHERE knowledge_base_id = ? AND path = ? AND status != 'failed' AND NOT archived "
                 "ORDER BY filename",
-                (path,),
+                (kb_id, path),
             )
         else:
             cursor = await self._db.execute(
                 f"SELECT {_DOC_COLUMNS} FROM documents "
-                "WHERE status != 'failed' ORDER BY filename",
+                "WHERE knowledge_base_id = ? AND status != 'failed' AND NOT archived ORDER BY filename",
+                (kb_id,),
             )
         rows = await cursor.fetchall()
         return [_row_to_dict(cursor, r) for r in rows]
@@ -168,10 +242,10 @@ class SQLiteDocumentRepository:
         doc_number = row[0]
 
         await self._db.execute(
-            "INSERT INTO documents (id, user_id, filename, title, path, relative_path, source_kind, "
+            "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, relative_path, source_kind, "
             "file_type, status, content, tags, version, document_number) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'md', 'ready', ?, ?, 0, ?)",
-            (doc_id, user_id, filename, title, path, relative_path, source_kind,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'md', 'ready', ?, ?, 0, ?)",
+            (doc_id, kb_id, user_id, filename, title, path, relative_path, source_kind,
              content, json.dumps(tags), doc_number),
         )
         await self._db.commit()
@@ -555,10 +629,10 @@ class SQLiteDocumentRepository:
         doc_number = row[0]
 
         await self._db.execute(
-            "INSERT INTO documents (id, user_id, filename, title, path, relative_path, source_kind, "
+            "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, relative_path, source_kind, "
             "file_type, file_size, status, document_number) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-            (doc_id, user_id, filename, title, path, relative_path, source_kind,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            (doc_id, kb_id, user_id, filename, title, path, relative_path, source_kind,
              file_type, file_size, doc_number),
         )
         await self._db.commit()
@@ -577,9 +651,9 @@ class SQLiteDocumentRepository:
         doc_number = row[0]
 
         await self._db.execute(
-            "INSERT INTO documents (id, user_id, filename, title, path, relative_path, source_kind, "
+            "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, relative_path, source_kind, "
             "file_type, file_size, status, content, tags, version, document_number, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'asset', ?, ?, 'ready', NULL, '[]', 0, ?, ?)",
+            "VALUES (?, (SELECT id FROM workspace LIMIT 1), ?, ?, ?, ?, ?, 'asset', ?, ?, 'ready', NULL, '[]', 0, ?, ?)",
             (doc_id, user_id, filename, title, path, relative_path, file_type,
              file_size, doc_number, json.dumps(metadata)),
         )

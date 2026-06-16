@@ -194,10 +194,10 @@ async def _index_file(db: aiosqlite.Connection, workspace: Path, file_path: Path
 
         status = "ready" if content is not None else "pending"
         await db.execute(
-            "INSERT INTO documents (id, user_id, filename, title, path, relative_path, "
+            "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, relative_path, "
             "source_kind, file_type, file_size, status, content, tags, version, "
             "content_hash, mtime_ns, last_indexed_at, document_number) "
-            "VALUES (?, (SELECT user_id FROM workspace LIMIT 1), ?, ?, ?, ?, ?, ?, ?, "
+            "VALUES (?, (SELECT id FROM workspace LIMIT 1), (SELECT user_id FROM workspace LIMIT 1), ?, ?, ?, ?, ?, ?, ?, "
             "?, ?, '[]', 0, ?, ?, datetime('now'), ?)",
             (doc_id, filename, title, dir_path, relative, source_kind,
              ext or "bin", stat.st_size, status, content, content_hash,

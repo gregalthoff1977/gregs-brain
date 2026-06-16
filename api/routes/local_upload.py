@@ -79,15 +79,18 @@ async def upload_file(
 
     async with serialized_write():
         try:
+            ws_row = await db.execute("SELECT id FROM workspace LIMIT 1")
+            ws = await ws_row.fetchone()
+            kb_id = ws[0] if ws else None
             cursor = await db.execute("SELECT COALESCE(MAX(document_number), 0) + 1 FROM documents")
             row = await cursor.fetchone()
             doc_number = row[0]
             await db.execute(
-                "INSERT INTO documents (id, user_id, filename, title, path, relative_path, "
+                "INSERT INTO documents (id, knowledge_base_id, user_id, filename, title, path, relative_path, "
                 "source_kind, file_type, file_size, status, content, tags, version, "
                 "content_hash, mtime_ns, last_indexed_at, document_number) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, ?, ?, datetime('now'), ?)",
-                (doc_id, user_id, filename, title, dir_path, relative, source_kind,
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, ?, ?, datetime('now'), ?)",
+                (doc_id, kb_id, user_id, filename, title, dir_path, relative, source_kind,
                  ext or "bin", len(content_bytes),
                  "ready" if text_content is not None else "pending",
                  text_content, content_hash,
@@ -101,9 +104,7 @@ async def upload_file(
     # Chunk text content or kick off processing for non-text files
     if text_content:
         from services.chunker import chunk_text
-        ws_row = await db.execute("SELECT id FROM workspace LIMIT 1")
-        ws = await ws_row.fetchone()
-        kb_id = ws[0] if ws else ""
+        kb_id = kb_id or ""
         chunks = chunk_text(text_content)
         await chunk_repo.store(doc_id, user_id, kb_id, chunks)
     elif needs_processing:
