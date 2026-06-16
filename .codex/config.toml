@@ -1,0 +1,3 @@
+[mcp_servers.gregs-brain]
+command = "/workspaces/gregs-brain/.venv/bin/python"
+args = ["/workspaces/gregs-brain/llmwiki", "mcp", "/home/codespace/gregs-brain-workspace"]
