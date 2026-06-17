@@ -99,7 +99,15 @@ curl -X POST http://localhost:8000/ingest/email \
   }'
 ```
 
-To connect a forwarding provider in Codespaces, start Gregs Brain, make port `8000` public or private as needed from the Codespaces Ports panel, and point the provider webhook at `https://YOUR-CODESPACE-8000.app.github.dev/ingest/email`. Map the provider's From, Subject, HTML body, plain text body, and timestamp fields to the JSON fields above. Providers with inbound webhook support such as Forward Email, Mailgun Routes, Postmark Inbound, SendGrid Inbound Parse, Zapier, or Make can all fit this shape. Keep the Codespace running while receiving forwarded email; this path is local-only and does not require Railway or OpenRouter.
+To connect a forwarding provider in Codespaces, start Gregs Brain, make port `8000` public or private as needed from the Codespaces Ports panel, and point the provider webhook at `https://YOUR-CODESPACE-8000.app.github.dev/ingest/email`. Map the provider's From, Subject, HTML body, plain text body, and timestamp fields to the JSON fields above. Providers with inbound webhook support such as Forward Email, Mailgun Routes, SendGrid Inbound Parse, Zapier, or Make can all fit this shape. Keep the Codespace running while receiving forwarded email; this path is local-only and does not require Railway or OpenRouter.
+
+For Postmark Inbound, point the Postmark inbound webhook directly at:
+
+```text
+https://YOUR-CODESPACE-8000.app.github.dev/ingest/email/postmark
+```
+
+That endpoint accepts Postmark's native inbound JSON and maps `FromFull.Email` (falling back to `From`), `Subject`, `HtmlBody`, `TextBody`, and `Date` into the same email ingest flow. Messages still become `/wiki/inbox/YYYY-MM-DD-subject.md` pages tagged `email` and `inbox`.
 
 # Supported files
 

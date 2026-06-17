@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from html import unescape
 
 import yaml
@@ -20,7 +21,10 @@ def parse_received_date(received_at: str) -> str:
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
-        parsed = datetime.now(UTC)
+        try:
+            parsed = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            parsed = datetime.now(UTC)
     if parsed.tzinfo:
         parsed = parsed.astimezone(UTC)
     return parsed.date().isoformat()

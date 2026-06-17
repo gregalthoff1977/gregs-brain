@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from deps import get_document_service, get_kb_service
 from services.base import DocumentService, KBService
@@ -18,11 +18,55 @@ class EmailIngestRequest(BaseModel):
     received_at: str = Field(max_length=128)
 
 
+class PostmarkAddress(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    Email: str | None = Field(default=None, max_length=512)
+
+
+class PostmarkInboundRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    FromFull: PostmarkAddress | None = None
+    From: str | None = Field(default=None, max_length=512)
+    Subject: str | None = Field(default=None, max_length=512)
+    HtmlBody: str | None = Field(default=None, max_length=10 * 1024 * 1024)
+    TextBody: str | None = Field(default=None, max_length=10 * 1024 * 1024)
+    Date: str | None = Field(default=None, max_length=128)
+
+    def to_email_ingest_request(self) -> EmailIngestRequest:
+        sender = (self.FromFull.Email if self.FromFull else None) or self.From or ""
+        return EmailIngestRequest(
+            sender=sender,
+            subject=self.Subject or "",
+            body_html=self.HtmlBody,
+            body_text=self.TextBody,
+            received_at=self.Date or "",
+        )
+
+
 @router.post("/email", status_code=201)
 async def ingest_email(
     body: EmailIngestRequest,
     kb_service: Annotated[KBService, Depends(get_kb_service)],
     document_service: Annotated[DocumentService, Depends(get_document_service)],
+):
+    return await _create_email_page(body, kb_service, document_service)
+
+
+@router.post("/email/postmark", status_code=201)
+async def ingest_postmark_email(
+    body: PostmarkInboundRequest,
+    kb_service: Annotated[KBService, Depends(get_kb_service)],
+    document_service: Annotated[DocumentService, Depends(get_document_service)],
+):
+    return await _create_email_page(body.to_email_ingest_request(), kb_service, document_service)
+
+
+async def _create_email_page(
+    body: EmailIngestRequest,
+    kb_service: KBService,
+    document_service: DocumentService,
 ):
     kbs = await kb_service.list()
     if not kbs:
