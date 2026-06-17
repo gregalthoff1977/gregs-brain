@@ -13,6 +13,7 @@ RUN pip install \
     uvicorn \
     pydantic \
     pydantic-settings \
-    python-multipart
+    python-multipart \
+    asyncpg
 
 CMD ["scripts/start-api-railway.sh"]
