@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["python311"]
+
+[start]
+cmd = "scripts/start-api-railway.sh"
