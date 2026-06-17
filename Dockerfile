@@ -8,12 +8,10 @@ RUN chmod +x scripts/start-api-railway.sh
 
 RUN pip install --upgrade pip
 
-RUN pip install \
-    fastapi \
-    uvicorn \
-    pydantic \
-    pydantic-settings \
-    python-multipart \
-    asyncpg
+RUN if [ -f api/requirements.txt ]; then pip install -r api/requirements.txt; fi
+
+RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+RUN pip install pyjwt
 
 CMD ["scripts/start-api-railway.sh"]
