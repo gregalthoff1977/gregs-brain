@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export CODEX_HOME="${CODEX_HOME:-/tmp/.codex}"
-export WORKSPACE_PATH="${WORKSPACE_PATH:-/data/gregs-brain-workspace}"
-export CODEX_API_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
+export CODEX_HOME="${CODEX_HOME:-/app/.codex}"
+export WORKSPACE_PATH="${WORKSPACE_PATH:-/app/wiki}"
 
 mkdir -p "$CODEX_HOME"
 
