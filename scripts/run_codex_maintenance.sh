@@ -8,4 +8,4 @@ export WORKSPACE_PATH="${WORKSPACE_PATH:-/data/gregs-brain-workspace}"
 
 cd /app
 
-codex exec < /app/scripts/codex-maintenance-prompt.md
+codex exec --skip-git-repo-check < /app/scripts/codex-maintenance-prompt.md
