@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKSPACE_PATH="${WORKSPACE_PATH:-/data/gregs-brain-workspace}"
-CODEX_HOME="${CODEX_HOME:-/data/.codex}"
+mkdir -p /data/.codex
 
-export CODEX_HOME
+export CODEX_HOME=/data/.codex
+export WORKSPACE_PATH="${WORKSPACE_PATH:-/data/gregs-brain-workspace}"
 
 cd /app
 
-codex exec --config /app/.codex/config.toml < /app/scripts/codex-maintenance-prompt.md
+codex exec < /app/scripts/codex-maintenance-prompt.md
