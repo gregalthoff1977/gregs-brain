@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware as _BaseCORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
+from routes.brain import router as brain_router
 
 
 class CORSMiddleware(_BaseCORSMiddleware):
@@ -234,6 +235,7 @@ app.include_router(usage_router)
 app.include_router(knowledge_bases_router)
 app.include_router(documents_router)
 app.include_router(strategy_router)
+app.include_router(brain_router)
 
 if settings.MODE == "local":
     from routes.local_upload import router as local_upload_router
