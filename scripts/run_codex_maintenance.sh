@@ -7,15 +7,12 @@ export WORKSPACE_PATH=/data/gregs-brain-workspace
 mkdir -p "$CODEX_HOME"
 mkdir -p "$WORKSPACE_PATH/wiki"
 
-cd /app
+cd "$WORKSPACE_PATH"
 
-cat scripts/codex-maintenance-prompt.md | \
+cat /app/scripts/codex-maintenance-prompt.md | \
 timeout 900 \
 codex exec \
   --skip-git-repo-check \
   --sandbox danger-full-access
-
-python scripts/refresh_wiki_overview.py
-python scripts/check-wiki-maintenance.py
 
 echo "Maintenance completed"
