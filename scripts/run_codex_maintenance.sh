@@ -1,10 +1,12 @@
+cat > scripts/run_codex_maintenance.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 export CODEX_HOME=/app/.codex
-export WORKSPACE_PATH=/app/wiki
+export WORKSPACE_PATH=/data/gregs-brain-workspace
 
 mkdir -p "$CODEX_HOME"
+mkdir -p "$WORKSPACE_PATH/wiki"
 
 cd /app
 
@@ -14,4 +16,7 @@ codex exec \
   --skip-git-repo-check \
   --sandbox danger-full-access
 
+python scripts/check-wiki-maintenance.py
+
 echo "Maintenance completed"
+EOF
