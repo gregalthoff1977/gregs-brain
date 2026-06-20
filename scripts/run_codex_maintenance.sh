@@ -1,4 +1,3 @@
-cat > scripts/run_codex_maintenance.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -19,4 +18,3 @@ codex exec \
 python scripts/check-wiki-maintenance.py
 
 echo "Maintenance completed"
-EOF
