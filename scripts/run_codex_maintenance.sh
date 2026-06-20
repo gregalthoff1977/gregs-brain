@@ -9,7 +9,6 @@ mkdir -p "$WORKSPACE_PATH/wiki"
 
 echo "=== CODEX WORKER DEBUG ==="
 date
-pwd
 echo "WORKSPACE_PATH=$WORKSPACE_PATH"
 echo "--- prompt contains ---"
 grep -n "ALL unprocessed" /app/scripts/codex-maintenance-prompt.md || true
@@ -20,15 +19,14 @@ find "$WORKSPACE_PATH/wiki/inbox" -type f | wc -l
 
 cd "$WORKSPACE_PATH"
 
-cat /app/scripts/codex-maintenance-prompt.md | \
-timeout 900 \
-codex exec \
+timeout 1800 codex exec \
   --skip-git-repo-check \
-  --sandbox danger-full-access
+  --sandbox danger-full-access \
+  < /app/scripts/codex-maintenance-prompt.md
 
 echo "--- wiki after ---"
 ls -lt "$WORKSPACE_PATH/wiki" | head
 echo "Processed count:"
-grep -R "Processed inbox item" "$WORKSPACE_PATH/wiki/log.md" | wc -l
+grep -R "Processed inbox item" "$WORKSPACE_PATH/wiki/log.md" | wc -l || true
 
 echo "Maintenance completed"
