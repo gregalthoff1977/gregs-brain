@@ -25,3 +25,4 @@ cryptography==48.0.1
 requests==2.33.1
 urllib3==2.7.0
 google-api-python-client==2.187.0
+mcp
