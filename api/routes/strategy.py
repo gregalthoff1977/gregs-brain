@@ -61,6 +61,24 @@ def rows_to_dict(rows):
 
     return output
 
+def mechanics_to_dict(rows):
+    if not rows or len(rows) < 2:
+        return {}
+
+    output = {}
+
+    for row in rows[1:]:
+        if len(row) < 4:
+            continue
+
+        rule_key = row[1]
+        value = row[3]
+
+        if rule_key:
+            output[rule_key] = value
+
+    return output
+
 
 @router.get("/current")
 async def get_current_strategy():
@@ -71,5 +89,5 @@ async def get_current_strategy():
         "quarter": rows_to_dict(read_range(service, "01 Quarterly Strategy!A:B")),
         "month": rows_to_dict(read_range(service, "02 Monthly Arcs!A:B")),
         "week": rows_to_dict(read_range(service, "03 Weekly Calendar!A:B")),
-        "mechanics": rows_to_dict(read_range(service, "07 Editorial Mechanics!B:D")),
+        "mechanics": mechanics_to_dict(read_range(service, "07 Editorial Mechanics!A:F")),
     }
