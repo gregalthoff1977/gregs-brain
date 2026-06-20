@@ -15,6 +15,7 @@ codex exec \
   --skip-git-repo-check \
   --sandbox danger-full-access
 
+python scripts/refresh_wiki_overview.py
 python scripts/check-wiki-maintenance.py
 
 echo "Maintenance completed"
