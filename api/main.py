@@ -45,6 +45,7 @@ from routes.documents import router as documents_router
 from routes.me import router as me_router
 from routes.usage import router as usage_router
 from routes.strategy import router as strategy_router
+from routes.wiki_viewer import router as wiki_viewer_router
 
 
 @asynccontextmanager
@@ -236,6 +237,7 @@ app.include_router(knowledge_bases_router)
 app.include_router(documents_router)
 app.include_router(strategy_router)
 app.include_router(brain_router)
+app.include_router(wiki_viewer_router)
 
 if settings.MODE == "local":
     from routes.local_upload import router as local_upload_router
