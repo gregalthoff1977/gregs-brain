@@ -8,8 +8,6 @@ cmds = [
   "if [ -f requirements.txt ]; then pip install -r requirements.txt; fi",
   "pip install pyjwt",
   "npm install -g @anthropic-ai/claude-code",
-  "node --version",
-  "npm --version",
   "claude --version"
 ]
 
