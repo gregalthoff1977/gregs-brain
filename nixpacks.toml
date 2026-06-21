@@ -1,5 +1,17 @@
 [phases.setup]
-nixPkgs = ["python311"]
+nixPkgs = ["python311", "nodejs_20", "nodePackages.npm"]
+
+[phases.install]
+cmds = [
+  "pip install --upgrade pip",
+  "if [ -f api/requirements.txt ]; then pip install -r api/requirements.txt; fi",
+  "if [ -f requirements.txt ]; then pip install -r requirements.txt; fi",
+  "pip install pyjwt",
+  "npm install -g @anthropic-ai/claude-code",
+  "node --version",
+  "npm --version",
+  "claude --version"
+]
 
 [start]
 cmd = "scripts/start-api-railway.sh"
