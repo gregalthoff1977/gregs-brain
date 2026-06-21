@@ -21,7 +21,7 @@ LLM Wiki is designed to work at three distinct scales:
 
 # Features
 
-- **Connect via MCP** Connect Claude.ai, Claude Cowork, Claude Code, or Codex (or any other MCP-compatible app)
+- **Connect via MCP** Connect Claude.ai, Claude Cowork, Claude Code, or any other MCP-compatible app.
 - **A Chrome extension** Clip webpages and PDFs as you read, highlight key sections, and leave comments that Claude can see over MCP.
 - **Uploads** Markdown, PowerPoint, PDFs, Word documents, and more.
 - **A clean Next.js web app** to navigate your own wikipedia — and view the underlying sources.
