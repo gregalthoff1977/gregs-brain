@@ -47,17 +47,6 @@ from routes.usage import router as usage_router
 from routes.strategy import router as strategy_router
 from routes.wiki_viewer import router as wiki_viewer_router
 
-from fastapi.staticfiles import StaticFiles
-
-app.mount(
-    "/wiki",
-    StaticFiles(
-        directory="/data/gregs-brain-workspace/wiki",
-        html=True
-    ),
-    name="wiki"
-)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -271,3 +260,16 @@ else:
     app.include_router(graph_router)
     app.include_router(ws_router)
     app.include_router(public_router)
+
+
+from fastapi.staticfiles import StaticFiles
+
+app.mount(
+    "/wiki",
+    StaticFiles(
+        directory="/data/gregs-brain-workspace/wiki",
+        html=True
+    ),
+    name="wiki"
+)
+
