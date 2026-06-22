@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 useradd -m claudeuser 2>/dev/null || true
 
@@ -17,35 +17,59 @@ cat >/app/.claude/mcp.json <<EOF
 EOF
 
 cat >/tmp/maintenance-prompt.txt <<EOF
-Use the gregs-brain MCP server.
+Use only the gregs-brain MCP server.
 
-Read the workspace guide.
+Do not inspect repository files.
+Do not read source code.
+Do not run shell commands.
+Do not inspect /app, /app/wiki, mcp, api, scripts, tests, or Docker files.
 
-Find everything added to /data/gregs-brain-workspace since the last maintenance run.
+Goal:
+Process only new inbox items since the last maintenance entry in wiki/log.md.
 
-Process new inbox items into the wiki:
-- update existing pages where possible
-- create new pages only where warranted
-- maintain cross-references and citations
-- append short processing notes to wiki/log.md
-- do not delete raw inbox files
-- do not write to /app/wiki
-- do not create /app/wiki/wiki
+Steps:
+1. Call guide.
+2. Identify the knowledge base.
+3. Read wiki/log.md only to find the last maintenance boundary.
+4. Search/list inbox sources only.
+5. If no new inbox items exist, append one short log.md entry and stop.
+6. If new inbox items exist, read only those new inbox items and directly relevant wiki pages.
+7. Update existing pages where possible.
+8. Create new pages only when clearly warranted.
+9. Append concise processing notes to wiki/log.md.
+
+Limits:
+- Maximum 20 source reads.
+- Maximum 10 wiki page reads.
+- Maximum 10 edits.
+- Do not run lint unless pages changed.
+- Do not summarize unchanged wiki content.
+
+Hard constraints:
+- Do not delete raw inbox files.
+- Do not write to /app/wiki.
+- Do not create /app/wiki/wiki.
+
+Report only:
+- inbox items processed
+- pages created
+- pages updated
+- log.md entries added
 EOF
 
 chown -R claudeuser:claudeuser \
-/app/.claude \
-/tmp/maintenance-prompt.txt \
-/data/gregs-brain-workspace
+  /app/.claude \
+  /tmp/maintenance-prompt.txt \
+  /data/gregs-brain-workspace
 
 su - claudeuser -c "
 cd /app &&
 export ANTHROPIC_API_KEY='$ANTHROPIC_API_KEY' &&
 claude \
---dangerously-skip-permissions \
---mcp-config /app/.claude/mcp.json \
---print \
-< /tmp/maintenance-prompt.txt
+  --dangerously-skip-permissions \
+  --mcp-config /app/.claude/mcp.json \
+  --print \
+  < /tmp/maintenance-prompt.txt
 "
 
 chown -R root:root /data/gregs-brain-workspace
