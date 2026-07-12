@@ -1,0 +1,7 @@
+[build]
+dockerfilePath = "discordbot/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "always"
